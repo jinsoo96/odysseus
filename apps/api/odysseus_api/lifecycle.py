@@ -27,10 +27,10 @@ from .models import Attempt, Event, Execution, MessengerMessage, WorkspaceFile, 
 log = logging.getLogger("odysseus.lifecycle")
 
 CANCEL_KEY = "odysseus:runner:cancel"
+CANCEL_TTL_S = 6 * 3600
 
 
 async def workspace_digest(db: AsyncSession, attempt_id: uuid.UUID, scenario_id: uuid.UUID) -> dict:
-    """시나리오 워크스페이스의 내용 해시 — 경로순으로 (path, sha256(content)) 를 이어 붙여 sha256."""
     rows = (
         await db.execute(
             select(WorkspaceFile.path, WorkspaceFile.content)
@@ -84,7 +84,7 @@ async def _snapshot(db: AsyncSession, attempt: Attempt) -> dict:
 
 
 async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason: str) -> int:
-    """queued/running 실행을 닫고 러너에 취소를 알린다. 이후 도착하는 콜백은 internal.py 가 감사용으로만 받는다."""
+    """Close queued/running work and leave durable-enough cancellation tombstones for the runner."""
     rows = (
         await db.execute(
             select(Execution).where(Execution.attempt_id == attempt_id, Execution.status.in_(("queued", "running")))
@@ -98,7 +98,8 @@ async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason
         r = get_redis()
         for e in rows:
             await r.sadd(CANCEL_KEY, str(e.id))
-        await r.expire(CANCEL_KEY, 300)
+        # Queue backlogs can exceed five minutes. Keep tombstones for the full attempt telemetry window.
+        await r.expire(CANCEL_KEY, CANCEL_TTL_S)
     except Exception:  # noqa: BLE001 — 취소 통지 실패가 종료를 막아선 안 된다
         log.warning("cancel notify failed attempt=%s", attempt_id)
     now = utcnow()
@@ -106,6 +107,8 @@ async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason
         e.status = "error"
         e.stderr = ((e.stderr or "") + f"\n[{reason}]").strip()
         e.finished_at = now
+        # Even if a stale worker later executes the old queue payload, its callback can no longer mutate state.
+        e.callback_token = None
     return len(rows)
 
 
@@ -117,7 +120,6 @@ async def finalize_attempt(
     actor: str = "candidate",
     submitted_at: datetime | None = None,
 ) -> Attempt | None:
-    """응시를 끝낸다. 이미 끝났으면 그대로 돌려준다. 행 잠금 아래에서 상태·취소·스냅샷·이벤트를 한 번에."""
     assert status in ("submitted", "expired")
     attempt = (
         await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
@@ -132,8 +134,6 @@ async def finalize_attempt(
     cancelled = await cancel_open_executions(
         db, attempt.id, "제출로 취소됨" if status == "submitted" else "마감으로 취소됨"
     )
-    # 스냅샷은 취소 뒤에 잰다 — 취소된 실행의 결과는 반영되지 않으므로 이 값이 최종이다.
-    # 시작 시점 정의는 reserved key로 함께 보존한다.
     attempt.snapshot = await _snapshot(db, attempt)
     public_snapshot = {
         sid: {"digest": v["digest"], "files": v["files"]}
