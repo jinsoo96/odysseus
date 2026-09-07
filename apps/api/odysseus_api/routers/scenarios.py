@@ -1,7 +1,7 @@
 """시나리오 CRUD — 관리자 스튜디오의 최신 authoring state.
 
 응시자는 시작 시 고정된 definition snapshot을 사용하므로, 과거 응시를 바꾸지 않고도
-시나리오를 계속 개선할 수 있다. 실제 응시 산출물이 존재하는 시나리오는 삭제 대신 보관한다.
+시나리오를 계속 개선할 수 있다. 실제 응시 흔적이 존재하는 시나리오는 삭제 대신 보관한다.
 """
 
 import uuid
@@ -16,7 +16,7 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..db import get_db
 from ..deps import require_admin, require_staff
-from ..models import AssessmentScenario, Scenario, User, WorkspaceFile
+from ..models import AssessmentScenario, Execution, MessengerMessage, Scenario, User, WorkspaceFile
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
 
 
@@ -72,13 +72,16 @@ def _apply(row: Scenario, body: ScenarioIn) -> None:
 
 
 async def _has_history(scenario_id: uuid.UUID, db: AsyncSession) -> bool:
-    """실제 응시 workspace가 있으면 FK/candidate history 보존을 위해 hard delete하지 않는다."""
-    row = (
-        await db.execute(
-            select(WorkspaceFile.id).where(WorkspaceFile.scenario_id == scenario_id).limit(1)
-        )
-    ).scalar_one_or_none()
-    return row is not None
+    """Any persisted candidate evidence makes the scenario historical and therefore archive-only."""
+    for model in (WorkspaceFile, MessengerMessage, Execution):
+        row = (
+            await db.execute(
+                select(model.id).where(model.scenario_id == scenario_id).limit(1)
+            )
+        ).scalar_one_or_none()
+        if row is not None:
+            return True
+    return False
 
 
 @router.get("", response_model=list[ScenarioSummary])
