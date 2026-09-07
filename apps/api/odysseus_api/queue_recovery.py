@@ -1,8 +1,8 @@
 """Recover the DB-commit -> Redis-enqueue crash window.
 
 Execution is durable in PostgreSQL first. `enqueue_run` is idempotent, so periodically replaying every
-row still marked `queued` is safe: an already pending/processing execution has its Redis marker and is
-not duplicated, while a process crash before enqueue is repaired automatically.
+row still marked `queued` is safe. New executions persist their exact input file payload in PostgreSQL;
+legacy queued rows without that field fall back to the current workspace as a one-time compatibility path.
 """
 
 from __future__ import annotations
@@ -36,11 +36,14 @@ async def reconcile_once() -> int:
         ).scalars().all()
         for execution in rows:
             try:
-                files = await ws.list_files(db, execution.attempt_id, execution.scenario_id)
+                input_files = execution.input_files
+                if input_files is None:
+                    legacy_rows = await ws.list_files(db, execution.attempt_id, execution.scenario_id)
+                    input_files = ws.files_payload(legacy_rows)
                 added = await enqueue_run(
                     str(execution.id),
                     execution.command,
-                    ws.files_payload(files),
+                    input_files,
                     settings.run_timeout_s,
                     attempt_id=str(execution.attempt_id),
                     scenario_id=str(execution.scenario_id),
