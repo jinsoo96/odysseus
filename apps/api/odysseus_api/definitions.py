@@ -1,11 +1,8 @@
 """Immutable assessment definitions bound to an attempt.
 
-The editable Scenario/Assessment rows are authoring state. An attempt must never read those rows as
-its source of truth after it has started, otherwise a later edit can silently change the problem,
-NPC knowledge, points, or grading criteria for historical candidates.
-
-To avoid a disruptive schema migration, the complete canonical definition is stored in the existing
-Attempt.snapshot JSONB under reserved keys. Workspace submission digests live alongside it.
+Editable Scenario/Assessment/AiProvider rows are authoring state. An attempt reads a canonical JSON
+snapshot captured at start, so later edits cannot change the problem, grading rules, model choice, or
+sampling limits of a historical/in-progress candidate.
 """
 
 from __future__ import annotations
@@ -14,22 +11,21 @@ import copy
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from .models import Assessment, AssessmentScenario, Attempt, Scenario
+from .models import AiProvider, Assessment, AssessmentScenario, Attempt, Scenario
 
 DEFINITION_KEY = "_definition"
 DEFINITION_HASH_KEY = "_definition_hash"
-DEFINITION_VERSION = 1
+DEFINITION_VERSION = 2
 
 
 def _json_copy(value: Any) -> Any:
-    """Detach mutable JSON values from SQLAlchemy rows and guarantee JSON-serializable output."""
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
@@ -58,6 +54,24 @@ def scenario_to_spec(scenario: Scenario, *, ordinal: int, points: int) -> dict:
     }
 
 
+async def _provider_profile(db: AsyncSession, provider_id_value: uuid.UUID | None) -> dict | None:
+    """Freeze non-secret behavior. Credentials stay in encrypted AiProvider storage and are read live."""
+    if not provider_id_value:
+        return None
+    row = await db.get(AiProvider, provider_id_value)
+    if not row:
+        return None
+    return {
+        "id": str(row.id),
+        "name": row.name,
+        "provider": row.provider,
+        "model": row.model,
+        "base_url": row.base_url,
+        "temperature": float(row.temperature),
+        "max_tokens": int(row.max_tokens),
+    }
+
+
 async def build_assessment_definition(db: AsyncSession, assessment: Assessment) -> dict:
     links = (
         await db.execute(
@@ -76,6 +90,10 @@ async def build_assessment_definition(db: AsyncSession, assessment: Assessment) 
         "agent_max_turns": int(assessment.agent_max_turns),
         "npc_provider_id": str(assessment.npc_provider_id) if assessment.npc_provider_id else None,
         "agent_provider_id": str(assessment.agent_provider_id) if assessment.agent_provider_id else None,
+        "provider_profiles": {
+            "npc": await _provider_profile(db, assessment.npc_provider_id),
+            "agent": await _provider_profile(db, assessment.agent_provider_id),
+        },
         "starts_at": assessment.starts_at.isoformat() if assessment.starts_at else None,
         "ends_at": assessment.ends_at.isoformat() if assessment.ends_at else None,
         "scenarios": [
@@ -84,7 +102,6 @@ async def build_assessment_definition(db: AsyncSession, assessment: Assessment) 
             if link.scenario is not None
         ],
     }
-    # Hash excludes itself by construction and therefore identifies exactly what the candidate saw.
     spec["definition_hash"] = canonical_hash(spec)
     return spec
 
@@ -103,9 +120,6 @@ async def definition_for_attempt(
     frozen = snap.get(DEFINITION_KEY)
     if isinstance(frozen, dict) and frozen.get("scenarios") is not None:
         return _json_copy(frozen)
-
-    # Legacy attempts predate definition snapshots. Keep them readable and bind the current definition
-    # once. Callers holding a FOR UPDATE transaction can disable the internal commit and commit later.
     assessment = await db.get(Assessment, attempt.assessment_id)
     if not assessment:
         raise LookupError("assessment not found for attempt")
@@ -168,6 +182,35 @@ def provider_id(definition: dict, key: str) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except ValueError:
         return None
+
+
+async def resolve_attempt_ai(db: AsyncSession, definition: dict, role: str):
+    """Resolve credentials live but apply the non-secret model/runtime settings frozen at attempt start."""
+    from .ai import provider as ai_provider
+
+    id_key = "npc_provider_id" if role == "npc" else "agent_provider_id"
+    frozen_id = provider_id(definition, id_key)
+    if frozen_id:
+        row = await db.get(AiProvider, frozen_id)
+        if not row or not row.enabled:
+            return None
+        resolved = ai_provider.resolved_from_row(row)
+    else:
+        resolved = await ai_provider.resolve_ai(db, "chat")
+    if resolved is None:
+        return None
+    profile = (definition.get("provider_profiles") or {}).get(role)
+    if not isinstance(profile, dict):
+        return resolved  # version-1/legacy snapshot
+    return replace(
+        resolved,
+        provider=str(profile.get("provider") or resolved.provider),
+        model=str(profile.get("model") or resolved.model),
+        base_url=profile.get("base_url") or resolved.base_url,
+        temperature=float(profile.get("temperature", resolved.temperature)),
+        max_tokens=int(profile.get("max_tokens", resolved.max_tokens)),
+        name=str(profile.get("name") or resolved.name),
+    )
 
 
 def definition_summary(snapshot: dict | None) -> tuple[str | None, str | None]:
