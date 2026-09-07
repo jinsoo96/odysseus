@@ -11,6 +11,7 @@ import hashlib
 import json
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..definitions import (
@@ -19,7 +20,8 @@ from ..definitions import (
     scenario_from_definition,
 )
 from ..lifecycle import workspace_digest
-from ..models import Attempt, Evaluation
+from ..models import Attempt, Evaluation, MessengerMessage
+from ..requirements_graph import graph_metrics
 from . import provider
 from .autoeval import (
     EVAL_PROMPT,
@@ -101,6 +103,26 @@ def combine_scores(
     }
 
 
+async def _requirement_metrics(db: AsyncSession, attempt: Attempt, scenario, checks: list[dict]) -> dict:
+    contacted = set(
+        (
+            await db.execute(
+                select(MessengerMessage.character_key).where(
+                    MessengerMessage.attempt_id == attempt.id,
+                    MessengerMessage.scenario_id == scenario.id,
+                    MessengerMessage.sender == "candidate",
+                )
+            )
+        ).scalars().all()
+    )
+    passed = {f"check-{i + 1}" for i, check in enumerate(checks) if bool(check.get("passed"))}
+    return graph_metrics(
+        scenario.requirement_graph or {},
+        contacted_characters={str(v) for v in contacted if v},
+        passed_check_ids=passed,
+    )
+
+
 async def evaluate_frozen_scenario(
     db: AsyncSession,
     res: provider.ResolvedAi,
@@ -108,6 +130,7 @@ async def evaluate_frozen_scenario(
     scenario,
 ) -> dict:
     checks = await run_checks(db, attempt, scenario)
+    requirement_metrics = await _requirement_metrics(db, attempt, scenario, checks)
 
     integrity_note = None
     snap = (attempt.snapshot or {}).get(str(scenario.id))
@@ -118,6 +141,10 @@ async def evaluate_frozen_scenario(
 
     evidence = await gather_evidence(db, attempt, scenario, checks)
     injection_hits = evidence.pop("_injection_hits", [])
+    # This section is trusted server-generated context. It gives the qualitative judge a structured
+    # view of which stakeholders the candidate actually contacted and which requirements were verified.
+    evidence["server_requirement_graph"] = scenario.requirement_graph
+    evidence["server_requirement_metrics"] = requirement_metrics
     raw = await provider.complete_text(
         res,
         [{"role": "user", "content": json.dumps(evidence, ensure_ascii=False, indent=1)}],
@@ -161,6 +188,8 @@ async def evaluate_frozen_scenario(
         "score_pct": round(score_engine["overall_pct"], 1),
         "earned_points": round(scenario.points * score_engine["overall_pct"] / 100.0, 1),
         "score_engine": score_engine,
+        "requirement_metrics": requirement_metrics,
+        "requirement_graph_mode": (scenario.requirement_graph or {}).get("mode"),
         "checks": checks,
         "checks_earned": checks_earned,
         "checks_total": checks_total,
@@ -205,6 +234,7 @@ async def run_auto_eval(
     }
     audit = {
         "definition_hash": (attempt.snapshot or {}).get(DEFINITION_HASH_KEY) or definition.get("definition_hash"),
+        "definition_version": definition.get("version"),
         "workspace_digests": snapshot_hashes,
         "eval_prompt_sha256": EVAL_PROMPT_SHA256,
         "score_engine_version": SCORE_ENGINE_VERSION,
