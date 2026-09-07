@@ -1,15 +1,18 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 
 import redis.asyncio as aioredis
+from redis.exceptions import RedisError
 
 from .config import settings
 
 QUEUE_KEY = "odysseus:run:queue"
 ENQUEUED_TTL_S = 24 * 3600
 
+log = logging.getLogger("odysseus.runqueue")
 _redis: aioredis.Redis | None = None
 
 # Marker + LPUSH happen in one Redis transaction (Lua). A reconciler can therefore call enqueue_run
@@ -64,7 +67,12 @@ async def enqueue_run(
     source: str = "",
     callback_token: str = "",
 ) -> bool:
-    """Atomically enqueue once per execution id. Returns True only when a new queue item was added."""
+    """Atomically enqueue once per execution id.
+
+    PostgreSQL owns the durable execution record and exact input snapshot. Redis is a delivery layer.
+    Therefore a transient Redis transport failure returns False instead of invalidating the execution;
+    the API reconciler retries every queued row. Serialization/programming errors still raise.
+    """
     job = {
         "execution_id": execution_id,
         "command": command,
@@ -77,12 +85,16 @@ async def enqueue_run(
     }
     job["sig"] = sign_job(job)
     payload = json.dumps(job, ensure_ascii=False, separators=(",", ":"))
-    added = await get_redis().eval(
-        _ENQUEUE_LUA,
-        2,
-        QUEUE_KEY,
-        enqueue_marker(execution_id),
-        payload,
-        ENQUEUED_TTL_S,
-    )
+    try:
+        added = await get_redis().eval(
+            _ENQUEUE_LUA,
+            2,
+            QUEUE_KEY,
+            enqueue_marker(execution_id),
+            payload,
+            ENQUEUED_TTL_S,
+        )
+    except (RedisError, OSError):
+        log.warning("Redis enqueue unavailable execution=%s; deferred to reconciler", execution_id)
+        return False
     return bool(added)
