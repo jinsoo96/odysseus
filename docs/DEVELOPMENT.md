@@ -67,6 +67,7 @@ sudo ./scripts/restore.sh /var/backups/odysseus/ (암호화, root 전용)<file>.
 | 변수 | 설명 |
 |---|---|
 | `JWT_SECRET` / `INTERNAL_TOKEN` | **필수.** 각각 `openssl rand -hex 32`. 운영 모드에서는 자리표시자·32자 미만이면 기동 거부, 개발 모드는 경고 |
+| `DATA_ENCRYPTION_KEY` | **운영 필수.** `openssl rand -hex 32`. DB 의 AI 공급자 키·관리자 설정을 AES-GCM 으로 감싼다. 백업과 한 세트로 보관 — 잃으면 복구 불가, 바꾸면 기존 값을 못 읽음. 개발 모드는 비워도 됨(평문, 경고) |
 | `POSTGRES_PASSWORD` | 기존 볼륨에 묶인 값 — 바꾸지 말 것 |
 | `RUNNER_CONCURRENCY` / `RUNNER_MEM_MB` | 동시 실행 수 / 러너 메모리 상한 (기본 2 / 4096) |
 | `REDIS_API_PASSWORD` / `REDIS_RUNNER_PASSWORD` | **필수.** Redis ACL 계정(api=전체, runner=큐 소비·자기 통계만) |

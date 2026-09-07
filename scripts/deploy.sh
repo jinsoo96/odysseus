@@ -33,6 +33,12 @@ if [[ -z "${BOOTSTRAP_ADMIN_EMAIL:-}" || -z "${BOOTSTRAP_ADMIN_PASSWORD:-}" ]]; 
   echo ".env 에 BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD 가 필요합니다 (배포 전후 보존 검증에 사용)." >&2
   exit 1
 fi
+# 운영은 DATA_ENCRYPTION_KEY 없이는 api 가 기동을 거부한다 — 컨테이너를 갈아끼운 뒤에 알게 되면 늦다.
+DEK="${DATA_ENCRYPTION_KEY:-}"
+if [[ "${ODYSSEUS_ENV:-production}" != "development" && ${#DEK} -lt 32 ]]; then
+  echo ".env 에 DATA_ENCRYPTION_KEY 가 필요합니다 (\`openssl rand -hex 32\`, 32자 이상). 한 번 정하면 DB 백업과 함께 보관하세요." >&2
+  exit 1
+fi
 
 # ── 0. 지금 무엇이 도는 중인지 알린다 ──────────────────────────
 if docker compose ps --status running --format '{{.Service}}' | grep -qx api; then

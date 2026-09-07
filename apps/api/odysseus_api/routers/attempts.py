@@ -62,6 +62,8 @@ ALLOWED_EVENT_TYPES = {
 
 # 브라우저 보고 이벤트의 payload 는 이 키만, 이 크기까지만 남긴다 (ODY-017).
 # 클립보드 원문은 평가에 필요하지 않으므로 받더라도 저장하지 않는다 — chars/source 같은 메타만 쓴다.
+# 참고자료 검색·열람은 서버가 직접 기록한다 (reference.py) — 브라우저가 보고한 값을 받으면 위조가 된다.
+# 브라우저 보고 이벤트의 payload 는 이 키만, 이 크기까지만 남긴다 (ODY-017). 클립보드 원문(text)은 받지 않는다.
 CLIENT_PAYLOAD_KEYS = {"away_ms", "chars", "app", "path", "page", "reason", "seq", "client_id", "source"}
 CLIENT_TEXT_MAX = 500
 CLIENT_SEQ_KEY = "odysseus:attempt:{aid}:client_seq"
@@ -200,6 +202,9 @@ async def _attempt_out(attempt: Attempt, db: AsyncSession) -> AttemptOut:
 
 @router.get("/my/assignments", response_model=list[MyAssignmentOut])
 async def my_assignments(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # 게스트는 배정을 받지 않는다 — 배정할 상대가 미리 존재하지 않기 때문이다.
+    # 대신 열려 있는 시험을 전부 본다. 스태프와 같은 목록을 보지만 이유는 다르고
+    # (권한이 아니라 배정의 부재), 권한은 아무것도 따라오지 않는다.
     sees_all = is_staff(user) or user.role == GUEST_ROLE
     assigned_ids: set[uuid.UUID] = {
         r
@@ -319,6 +324,8 @@ async def start_attempt(
     if assessment.ends_at and now > assessment.ends_at:
         raise HTTPException(400, "시험 응시 기간이 종료되었습니다")
 
+    # ODY-015: 같은 (시험, 사용자) 의 동시 시작은 트랜잭션 advisory lock 으로 줄 세운다.
+    # 잠금 아래에서 조회→생성이 원자적이고, 그래도 겹치면 부분 유일 인덱스가 막는다 (아래 IntegrityError).
     await _lock_attempt_slot(db, assessment_id, user.id)
     existing = await _active_attempt(db, assessment_id, user.id)
     if existing:
@@ -380,6 +387,7 @@ async def post_events(
     if attempt.user_id != user.id:
         raise HTTPException(403, "본인의 응시에만 기록할 수 있습니다")
     if attempt.status != "in_progress":
+        # 종료 직후 도착하는 마지막 플러시(화면 이탈·탭 전환 등)만 짧게 받아 준다 — 변경은 아니다
         ended = attempt.submitted_at or attempt.deadline_at
         if not ended or utcnow() > ended + EVENT_FLUSH_GRACE:
             return {"ok": True, "recorded": 0}
@@ -389,6 +397,7 @@ async def post_events(
         for s in definition.get("scenarios") or []
         if s.get("scenario_id")
     }
+    # 순서 번호 — Redis 에 마지막 값을 둔다 (없으면 순서 검사를 건너뛴다)
     last_seq: int | None = None
     redis = None
     try:
@@ -501,6 +510,8 @@ async def retake_attempt(
     if user.role == "evaluator" and attempt.user_id != user.id:
         raise HTTPException(403, "평가자는 본인 체험 응시만 재응시할 수 있습니다")
 
+    # ODY-015: 같은 슬롯의 잠금 아래에서 '이전 것 superseded + 새 것 생성' 을 한 트랜잭션으로.
+    # 두 관리자가 동시에 재응시를 눌러도 활성 응시는 하나만 남는다.
     await _lock_attempt_slot(db, attempt.assessment_id, attempt.user_id)
     await db.refresh(attempt)
     if attempt.superseded:

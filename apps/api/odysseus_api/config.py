@@ -18,8 +18,11 @@ class Settings(BaseSettings):
     # 운영 모드가 기본. development 에서만 데모 시드(고정 비밀번호)가 허용된다.
     odysseus_env: str = "production"
     seed_demo_data: bool = False
+    # 빈 DB 최초 기동 시 만들 관리자 — 비밀번호를 비우면 무작위로 만들어 로그에 한 번 출력한다
     bootstrap_admin_email: str = ""
     bootstrap_admin_password: str = ""
+    # 세션 쿠키 Secure 와 "프록시를 거친 변경 요청은 HTTPS 여야 한다" 규칙 (ODY-014).
+    # None 이면 운영 모드에서 켜지고 개발 모드에서 꺼진다.
     cookie_secure: bool | None = None
     https_only: bool | None = None
 
@@ -61,6 +64,7 @@ def https_only_enabled() -> bool:
     return settings.https_only if settings.https_only is not None else settings.odysseus_env != "development"
 
 
+# 코드·예시 파일에 한 번이라도 적혔던 값 — 어디에서든 시크릿으로 받지 않는다
 KNOWN_PLACEHOLDER_SECRETS = frozenset(
     {
         "",

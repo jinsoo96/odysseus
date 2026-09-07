@@ -132,6 +132,10 @@ idempotent enqueue를 다시 시도합니다. 이미 Redis에 들어간 executio
 Runner가 작업을 꺼낸 뒤 죽으면 raw job은 `odysseus:run:processing:<RUNNER_ID>`에 남습니다.
 같은 `RUNNER_ID`로 재시작하면 시작 시 processing list를 pending queue로 되돌립니다.
 
+`queued` 인 채로 30분 넘게 아무 runner 도 받아가지 않은 execution(서명 불일치로 버려졌거나 `RUNNER_ID` 변경으로 processing
+리스트에 고아가 된 경우)도 `run_stale_reaped(from_status=queued)` 로 닫고 enqueue marker 를 지웁니다. 같은 execution 이
+5번 넘게 전달되면(결과 콜백이 결정적으로 5xx 인 경우) runner 는 더 실행하지 않고 error 로 보고한 뒤 ACK 합니다.
+
 Runner가 `running` callback까지 보낸 뒤 영구적으로 사라지는 경우도 처리합니다. API watchdog은 서버가 기록한
 `run_started` 이벤트 기준으로 정상 sandbox timeout + callback retry 시간을 충분히 넘긴 execution을
 `run_stale_reaped`로 종료하고 callback token을 폐기하며 cancellation tombstone을 남깁니다. 따라서 고아
@@ -150,10 +154,11 @@ Runner가 `running` callback까지 보낸 뒤 영구적으로 사라지는 경�
 
 ## 6. Runner 격리와 자원 제한
 
-운영 기본값은 `RUNNER_REQUIRE_ISOLATION=true`입니다. PID/mount/IPC/UTS/net namespace를 만들 수
-없는 환경에서는 candidate code를 **비격리 상태로 실행하는 대신 runner 기동 자체를 거부**합니다.
+운영 기본값은 `RUNNER_REQUIRE_ISOLATION=true`입니다. 기동 시 실제로 `unshare` 로 PID/mount/IPC/UTS/net namespace 를
+만들어 보고(바이너리 존재 여부가 아니라 실행 성공 여부), 만들 수 없는 환경에서는 candidate code를 **비격리 상태로
+실행하는 대신 runner 기동 자체를 거부**합니다.
 
-기존 container `mem_limit`에 더해 실행별 descendant RSS watchdog이 있습니다.
+기존 container `mem_limit`에 더해 실행별 descendant 메모리(Pss, 공유 페이지 중복 없이) watchdog이 있습니다.
 
 - `RUNNER_MEM_MB`: runner container 전체 메모리 상한
 - `RUNNER_EXEC_MEM_MB`: execution 한 건의 process-tree RSS 상한
@@ -204,7 +209,8 @@ DATA_ENCRYPTION_KEY=<생성한 값>
 - `AppSetting.value` 전체 (GitHub token, 검색 API key, legacy AI 설정 포함 가능)
 
 AES-256-GCM + random nonce를 사용하며, 같은 평문도 저장할 때 서로 다른 ciphertext가 생성됩니다.
-기존 plaintext row는 새 버전 최초 기동 시 자동으로 encrypted envelope로 다시 저장됩니다.
+기존 plaintext row는 새 버전 최초 기동 시 자동으로 encrypted envelope로 다시 저장됩니다 (원문 컬럼을 직접 읽어 아직
+평문인 행만 — 이후 기동에서는 다시 쓰지 않습니다).
 
 ### 매우 중요한 백업/롤백 규칙
 
@@ -232,8 +238,8 @@ plaintext secret을 암호화한 뒤에는 구버전이 ciphertext를 API key로
 - agent quota reservation: PostgreSQL `Attempt FOR UPDATE`
 - startup schema migration: PostgreSQL transaction advisory lock
 
-Redis가 순간적으로 unavailable할 때 rate limiter는 제한 자체를 없애지 않고 process-local fallback을
-사용합니다. 큐는 DB `queued` 상태와 exact input snapshot을 보존하고 Redis가 돌아오면 reconciler가 복구합니다.
+Redis가 순간적으로 unavailable할 때 rate limiter와 agent/messenger lease 는 제한 자체를 없애지 않고 process-local
+fallback 을 사용합니다 (API 의 Redis 클라이언트는 연결 2s/명령 5s 타임아웃이라 멈춘 Redis 가 요청을 매달지 못합니다). 큐는 DB `queued` 상태와 exact input snapshot을 보존하고 Redis가 돌아오면 reconciler가 복구합니다.
 
 ## 9. Versioned schema migration ledger
 
@@ -264,6 +270,7 @@ Web runtime은 audited lockfile 기준으로 Next.js `15.5.25`, React/React DOM 
 PR CI는 다음을 merge gate로 둡니다.
 
 - Python source compile
+- api/edge/runner 컨테이너 이미지 실제 빌드
 - locked dependency closure (`pip check`)
 - 실제 FastAPI application import
 - reliability unit tests
@@ -284,7 +291,7 @@ staging 검증을 계속 유지해야 합니다. CI가 green이어도 이 운영
 ## 12. 배포 체크리스트
 
 1. 현재 DB backup을 생성하고 **실제 복원 가능성**을 확인합니다.
-2. `DATA_ENCRYPTION_KEY=$(openssl rand -hex 32)` 값을 secret store와 `.env`에 저장합니다.
+2. `DATA_ENCRYPTION_KEY=$(openssl rand -hex 32)` 값을 secret store와 `.env`에 저장합니다 (`scripts/deploy.sh` 는 운영에서 이 값이 없으면 시작 전에 멈춥니다).
 3. `JWT_SECRET`, `INTERNAL_TOKEN`, Redis 두 password가 각각 충분히 긴 독립 값인지 확인합니다.
 4. 진행 중인 시험이 있다면 연결된 NPC/Agent provider를 삭제/disable하지 않습니다.
 5. runner replica가 하나보다 많으면 고유하고 재시작 후에도 안정적인 `RUNNER_ID`를 지정합니다.
