@@ -46,6 +46,18 @@ jobs:
           REDIS_RUNNER_PASSWORD: ci-runner-password
         run: docker compose config --quiet
 
+  images:
+    # 컨테이너 이미지가 실제로 빌드되는지 — 잘린 다이제스트 같은 실수는 compose config 만으로는 안 잡힌다.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build api image
+        run: docker build -q apps/api
+      - name: Build edge image
+        run: docker build -q apps/edge
+      - name: Build runner image
+        run: docker build -q apps/runner
+
   backend-audit:
     runs-on: ubuntu-latest
     steps:
