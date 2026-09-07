@@ -12,19 +12,23 @@ import asyncio
 import logging
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.orm import undefer
 
 from . import workspace as ws
 from .config import settings
 from .db import SessionLocal
 from .models import Event, Execution, utcnow
-from .runqueue import enqueue_run, get_redis
+from .runqueue import enqueue_marker, enqueue_run, get_redis
 
 log = logging.getLogger("odysseus.queue-recovery")
 RECONCILE_INTERVAL_S = 15.0
 BATCH_SIZE = 100
 CANCEL_KEY = "odysseus:runner:cancel"
 STALE_RUNNING_MIN_S = 5 * 60
+# queued 인 채로 이만큼 지나면 더 기다리지 않는다 — 서명 불일치로 러너가 버렸거나 RUNNER_ID 가 바뀌어
+# processing 리스트에 고아가 된 작업이 마커 TTL(24h) 동안 응시자의 동시 실행 슬롯을 붙들지 않게.
+STALE_QUEUED_S = 30 * 60
 
 
 async def reconcile_once() -> int:
@@ -33,6 +37,7 @@ async def reconcile_once() -> int:
         rows = (
             await db.execute(
                 select(Execution)
+                .options(undefer(Execution.input_files))
                 .where(Execution.status == "queued", Execution.callback_token.is_not(None))
                 .order_by(Execution.created_at)
                 .limit(BATCH_SIZE)
@@ -40,6 +45,12 @@ async def reconcile_once() -> int:
         ).scalars().all()
         for execution in rows:
             try:
+                try:
+                    # 이미 Redis 에 들어가 있으면(마커 존재) 큰 payload 를 매 주기 다시 직렬화하지 않는다.
+                    if await get_redis().exists(enqueue_marker(str(execution.id))):
+                        continue
+                except Exception:  # noqa: BLE001 — Redis 가 없으면 아래 enqueue 가 False 를 돌려준다
+                    pass
                 input_files = execution.input_files
                 if input_files is None:
                     legacy_rows = await ws.list_files(db, execution.attempt_id, execution.scenario_id)
@@ -81,6 +92,44 @@ async def _started_at(db, execution: Execution):
     return None
 
 
+async def _close_stale(db, execution: Execution, *, from_status: str, note: str, threshold_s: int) -> bool:
+    """Conditional close: 결과 콜백이 먼저 들어와 done 으로 바뀐 행은 덮어쓰지 않는다."""
+    result = await db.execute(
+        update(Execution)
+        .where(Execution.id == execution.id, Execution.status == from_status)
+        .values(
+            status="error",
+            stderr=((execution.stderr or "") + f"\n[{note}]").strip(),
+            finished_at=utcnow(),
+            callback_token=None,
+            input_files=None,
+        )
+    )
+    if result.rowcount != 1:
+        return False
+    db.add(
+        Event(
+            attempt_id=execution.attempt_id,
+            scenario_id=execution.scenario_id,
+            type="run_stale_reaped",
+            payload={
+                "execution_id": str(execution.id),
+                "from_status": from_status,
+                "threshold_s": threshold_s,
+                "actor": "queue_recovery",
+            },
+        )
+    )
+    try:
+        r = get_redis()
+        await r.sadd(CANCEL_KEY, str(execution.id))
+        await r.expire(CANCEL_KEY, 6 * 3600)
+        await r.delete(enqueue_marker(str(execution.id)))
+    except Exception:  # noqa: BLE001 — DB closure must not depend on Redis availability
+        pass
+    return True
+
+
 async def reap_stale_running() -> int:
     """Close executions whose runner vanished after marking them running."""
     threshold_s = max(STALE_RUNNING_MIN_S, int(settings.run_timeout_s) + 180)
@@ -101,32 +150,33 @@ async def reap_stale_running() -> int:
             observed = started or execution.created_at
             if not observed or observed > cutoff:
                 continue
-            execution.status = "error"
-            execution.stderr = (
-                (execution.stderr or "")
-                + "\n[러너 응답이 장시간 없어 고아 실행을 자동 종료했습니다]"
-            ).strip()
-            execution.finished_at = utcnow()
-            execution.callback_token = None
-            db.add(
-                Event(
-                    attempt_id=execution.attempt_id,
-                    scenario_id=execution.scenario_id,
-                    type="run_stale_reaped",
-                    payload={
-                        "execution_id": str(execution.id),
-                        "threshold_s": threshold_s,
-                        "actor": "queue_recovery",
-                    },
-                )
+            if await _close_stale(
+                db, execution, from_status="running", note="러너 응답이 장시간 없어 고아 실행을 자동 종료했습니다", threshold_s=threshold_s
+            ):
+                reaped += 1
+        if reaped:
+            await db.commit()
+    return reaped
+
+
+async def reap_stale_queued() -> int:
+    """Close executions that no runner ever claimed within the queued window."""
+    cutoff = utcnow() - timedelta(seconds=STALE_QUEUED_S)
+    reaped = 0
+    async with SessionLocal() as db:
+        queued = (
+            await db.execute(
+                select(Execution)
+                .where(Execution.status == "queued", Execution.created_at < cutoff)
+                .order_by(Execution.created_at)
+                .limit(BATCH_SIZE)
             )
-            try:
-                r = get_redis()
-                await r.sadd(CANCEL_KEY, str(execution.id))
-                await r.expire(CANCEL_KEY, 6 * 3600)
-            except Exception:  # noqa: BLE001 — DB closure must not depend on Redis availability
-                pass
-            reaped += 1
+        ).scalars().all()
+        for execution in queued:
+            if await _close_stale(
+                db, execution, from_status="queued", note="러너가 오래 받아가지 않아 실행을 취소했습니다", threshold_s=STALE_QUEUED_S
+            ):
+                reaped += 1
         if reaped:
             await db.commit()
     return reaped
@@ -141,6 +191,9 @@ async def recovery_loop() -> None:
             stale = await reap_stale_running()
             if stale:
                 log.warning("reaped %d stale running executions", stale)
+            stuck = await reap_stale_queued()
+            if stuck:
+                log.warning("reaped %d executions stuck in queued", stuck)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

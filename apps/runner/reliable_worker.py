@@ -27,6 +27,41 @@ QUEUE_KEY = legacy.QUEUE_KEY
 CANCEL_KEY = legacy.CANCEL_KEY
 RUNNER_ID = os.environ.get("RUNNER_ID", "runner-main").strip() or "runner-main"
 PROCESSING_KEY = f"odysseus:run:processing:{RUNNER_ID}"
+# 같은 실행을 이만큼 넘게 받으면 더 돌리지 않는다 — 결과 콜백이 결정적으로 5xx 를 내는 payload 가
+# 응시자 CPU 를 무한히 태우며 재전송되는 것을 막는다.
+MAX_DELIVERIES = 5
+DELIVERY_KEY_TTL_S = 24 * 3600
+
+
+def _delivery_count(conn, raw: str) -> tuple[str, int]:
+    try:
+        execution_id = str(json.loads(raw)["execution_id"])
+    except Exception:  # noqa: BLE001 — 깨진 payload 는 handle_reliable 이 error 로 보고하고 ACK 한다
+        return "?", 1
+    try:
+        key = f"odysseus:run:deliveries:{execution_id}"
+        n = int(conn.incr(key))
+        conn.expire(key, DELIVERY_KEY_TTL_S)
+        return execution_id, n
+    except redis.RedisError:
+        return execution_id, 1
+
+
+def probe_isolation() -> bool:
+    """실제로 네임스페이스를 만들어 본다 — 바이너리 존재 여부만으로는 SYS_ADMIN/AppArmor 거부를 못 본다."""
+    import subprocess
+
+    uid, gid = legacy.next_exec_uid()
+    try:
+        proc = subprocess.run(
+            legacy.wrap_isolated("true", uid, gid), capture_output=True, timeout=30, cwd="/work"
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[runner] isolation probe failed to run: {type(exc).__name__}", flush=True)
+        return False
+    if proc.returncode != 0:
+        print(f"[runner] isolation probe exit={proc.returncode}: {legacy._log_safe(proc.stderr.decode(errors='replace'), 300)}", flush=True)
+    return proc.returncode == 0
 
 
 def _report_ok(execution_id: str, payload: dict, callback_token: str) -> bool:
@@ -180,7 +215,8 @@ def main() -> None:
     if len(legacy.INTERNAL_TOKEN) < 32:
         print("[runner] INTERNAL_TOKEN 이 없거나 너무 짧습니다 (최소 32자) — 기동하지 않습니다", flush=True)
         sys.exit(2)
-    if legacy.isolation_available() is False and os.environ.get("RUNNER_REQUIRE_ISOLATION", "true").lower() not in ("0", "false", "no"):
+    require_isolation = os.environ.get("RUNNER_REQUIRE_ISOLATION", "true").lower() not in ("0", "false", "no")
+    if require_isolation and (legacy.isolation_available() is False or not probe_isolation()):
         print("[runner] required namespace isolation is unavailable — refusing to execute candidate code", flush=True)
         sys.exit(3)
 
@@ -208,7 +244,22 @@ def main() -> None:
 
         def run(claimed=raw):
             try:
-                ack = handle_reliable(claimed, conn)
+                execution_id, deliveries = _delivery_count(conn, claimed)
+                if deliveries > MAX_DELIVERIES:
+                    print(f"[runner] execution={legacy._log_safe(execution_id, 40)} delivered {deliveries} times — giving up", flush=True)
+                    try:
+                        job = json.loads(claimed)
+                        token = str(job.get("callback_token", ""))
+                    except Exception:  # noqa: BLE001
+                        token = ""
+                    _report_ok(
+                        execution_id,
+                        {"status": "error", "exit_code": None, "stdout": "", "stderr": "runner gave up after repeated delivery failures", "changed_files": []},
+                        token,
+                    )
+                    ack = True
+                else:
+                    ack = handle_reliable(claimed, conn)
                 conn.lrem(PROCESSING_KEY, 1, claimed)
                 if not ack:
                     conn.lpush(QUEUE_KEY, claimed)

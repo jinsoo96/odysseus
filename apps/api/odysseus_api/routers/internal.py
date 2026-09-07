@@ -37,6 +37,7 @@ def _client(request: Request) -> str:
 
 
 def verify_internal(request: Request, x_internal_token: str = Header(default="")):
+    # 프록시를 지나온 요청은 내부 호출일 수 없다 — 토큰을 보기 전에 자른다
     if any(h in request.headers for h in PROXY_HEADERS):
         log.warning("internal: proxied request rejected path=%s from=%s", request.url.path, _client(request))
         raise HTTPException(404, "Not Found")
@@ -157,6 +158,7 @@ async def report_result(
     _verify_execution_token(execution, x_execution_token, request)
     if execution.status in ("done", "error"):
         return {"ok": True, "duplicate": True}
+    # 응시 행을 잠근 채 상태를 본다 — finalize_attempt 와 직렬화되어 "제출 직후 반영" 이 끼어들 수 없다
     attempt = (
         await db.execute(select(Attempt).where(Attempt.id == execution.attempt_id).with_for_update())
     ).scalar_one_or_none()
@@ -164,12 +166,17 @@ async def report_result(
 
     execution.status = body.status
     execution.exit_code = body.exit_code
+    # NUL 은 Postgres text 가 저장하지 못한다 — 여기서 걸러야 바이너리를 출력한
+    # 명령 때문에 결과 보고 전체가 실패하고 실행이 영영 '실행 중'으로 남지 않는다.
     execution.stdout = _pg_safe(body.stdout)[: 4 * 1024 * 1024]
     execution.stderr = _pg_safe(body.stderr)[: 64 * 1024]
     execution.time_ms = body.time_ms
     execution.finished_at = utcnow()
+    # 한 번 소비된 토큰은 지운다 — 같은 실행에 두 번째 보고는 위 duplicate 분기와 무관하게 401
     execution.callback_token = None
+    execution.input_files = None  # 재전송용 스냅샷은 더 필요 없다
 
+    # 실행이 만든 파일 변경을 워크스페이스에 반영 (체크 실행은 채점용 — 반영하지 않는다)
     applied: list[dict] = []
     if frozen and body.changed_files:
         log.warning(

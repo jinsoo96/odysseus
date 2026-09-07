@@ -17,7 +17,11 @@ _REAL_EXECUTE = legacy.execute
 CONTAINER_MEM_MB = int(os.environ.get("RUNNER_MEM_MB", "4096"))
 DEFAULT_EXEC_MEM_MB = max(512, int(CONTAINER_MEM_MB * 0.8 / max(1, legacy.CONCURRENCY)))
 _raw_exec_mem = os.environ.get("RUNNER_EXEC_MEM_MB", "").strip()
-EXEC_MEM_MB = max(256, int(_raw_exec_mem or DEFAULT_EXEC_MEM_MB))
+try:
+    EXEC_MEM_MB = max(256, int(_raw_exec_mem or DEFAULT_EXEC_MEM_MB))
+except ValueError:
+    print(f"[runner] RUNNER_EXEC_MEM_MB 값이 숫자가 아닙니다 ({_raw_exec_mem!r}) — 자동값 {DEFAULT_EXEC_MEM_MB}MB 사용", flush=True)
+    EXEC_MEM_MB = DEFAULT_EXEC_MEM_MB
 
 
 def guarded_execute(*args, **kwargs):

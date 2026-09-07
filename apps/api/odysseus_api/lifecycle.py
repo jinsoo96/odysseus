@@ -109,6 +109,7 @@ async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason
         e.finished_at = now
         # Even if a stale worker later executes the old queue payload, its callback can no longer mutate state.
         e.callback_token = None
+        e.input_files = None
     return len(rows)
 
 
