@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from .config import check_startup_security, https_only_enabled, settings
 from .db import Base, SessionLocal, engine
+from .queue_recovery import recovery_loop
 from .secrets import install_encrypted_types, migrate_encrypted_storage
 from .routers import (
     access,
@@ -27,11 +28,8 @@ from .routers import (
 )
 from .seed import bootstrap_if_empty, seed_demo_if_empty
 
-# Routers import the models. Replace the persistence types before the first application query so
-# Python sees plaintext while PostgreSQL stores authenticated ciphertext.
 install_encrypted_types()
 
-# create_all은 기존 테이블에 컬럼을 추가하지 않는다 — 스키마 변경은 여기에 idempotent DDL로 누적
 MIGRATIONS: list[str] = [
     "ALTER TABLE attempts ADD COLUMN IF NOT EXISTS current_ordinal INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE executions ADD COLUMN IF NOT EXISTS callback_token VARCHAR(64)",
@@ -68,18 +66,16 @@ MIGRATIONS: list[str] = [
     """,
 ]
 
-# All API replicas run startup. One transaction-scoped advisory lock makes bootstrap DDL a single
-# ordered operation instead of letting multiple replicas race CREATE/ALTER/TRIGGER statements.
 SCHEMA_MIGRATION_LOCK = 5_472_943_197_011
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fail before touching stored secrets if production credentials are incomplete.
     check_startup_security()
     for i in range(30):
         try:
             async with engine.begin() as conn:
+                # Multiple API replicas may boot together; serialize DDL/bootstrap changes.
                 await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SCHEMA_MIGRATION_LOCK})
                 await conn.run_sync(Base.metadata.create_all)
                 for stmt in MIGRATIONS:
@@ -91,15 +87,20 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(2)
 
     async with SessionLocal() as db:
-        # Legacy plaintext provider/AppSetting values are rewritten through the AES-GCM SQLAlchemy
-        # types before normal request handling starts. This is idempotent on every boot.
         await migrate_encrypted_storage(db)
         if settings.seed_demo_data:
             await seed_demo_if_empty(db)
         else:
             await bootstrap_if_empty(db)
-    yield
-    await engine.dispose()
+
+    queue_recovery_task = asyncio.create_task(recovery_loop(), name="execution-queue-recovery")
+    try:
+        yield
+    finally:
+        queue_recovery_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await queue_recovery_task
+        await engine.dispose()
 
 
 app = FastAPI(title="Odysseus API", version="0.1.0", lifespan=lifespan)
@@ -110,9 +111,7 @@ MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 @app.middleware("http")
 async def no_store_and_origin_check(request, call_next):
-    """ODY-023: 모든 API 응답은 저장하지 않는다 (답안·대화·평가가 브라우저 캐시에 남지 않게).
-    ODY-024: 프록시를 거쳐 온 변경 요청은 Origin 이 이 사이트여야 한다 (CSRF).
-    """
+    """ODY-023: API 응답 비저장 + ODY-024: 프록시 변경 요청의 same-origin 검증."""
     if request.method in MUTATING and any(h in request.headers for h in PROXY_MARKERS):
         origin = request.headers.get("origin")
         host = request.headers.get("host", "")
@@ -139,7 +138,6 @@ async def no_store_and_origin_check(request, call_next):
 
 @app.middleware("http")
 async def require_https_behind_proxy(request, call_next):
-    """운영 모드: 프록시를 거쳐 온 변경 요청은 HTTPS 였어야 한다 (ODY-014)."""
     if https_only_enabled() and request.method in MUTATING and any(h in request.headers for h in PROXY_MARKERS):
         proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
         if proto != "https":
