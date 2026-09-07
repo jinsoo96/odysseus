@@ -11,11 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai import npc
-from ..ai import provider as ai_provider
 from ..ai.errors import describe_error
 from ..config import settings
 from ..db import get_db
-from ..definitions import definition_for_attempt, provider_id
+from ..definitions import definition_for_attempt, resolve_attempt_ai
 from ..deps import get_current_user
 from ..guests import guest_chat_gate
 from ..locks import acquire_lease
@@ -75,7 +74,6 @@ async def send_message(
     enforce(f"messenger:{attempt_id}", per_min=12, burst=6, what="메시지 전송")
     await guest_chat_gate(db, user, attempt_id, what="메시지 전송")
 
-    # 동일 NPC 대화는 한 턴씩 처리한다. 서로 다른 NPC는 병렬 대화할 수 있다.
     lease = await acquire_lease(
         f"messenger-turn:{attempt_id}:{scenario_id}:{character_key}", ttl_s=3 * 60
     )
@@ -83,7 +81,6 @@ async def send_message(
         raise HTTPException(409, "이 대화방의 이전 메시지를 처리 중입니다. 답변이 온 뒤 다시 보내세요")
 
     try:
-        # 총 메시지 한도 예약은 Attempt 행 잠금 아래에서 수행해 서로 다른 NPC로 동시에 보내도 초과하지 않는다.
         await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
         sent = (
             await db.execute(
@@ -100,9 +97,7 @@ async def send_message(
             )
 
         definition = await definition_for_attempt(db, attempt, persist_legacy=False)
-        res = await ai_provider.resolve_ai(
-            db, "chat", override_provider_id=provider_id(definition, "npc_provider_id")
-        )
+        res = await resolve_attempt_ai(db, definition, "npc")
         if res is None or not res.configured:
             await db.rollback()
             raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
@@ -140,7 +135,7 @@ async def send_message(
         try:
             reply = await npc.generate_reply(res, scenario, character, list(history))
             meta: dict = {}
-        except Exception as e:  # noqa: BLE001 — 오류는 코드·상관 ID 로만 남긴다 (ODY-022)
+        except Exception as e:  # noqa: BLE001
             reply = "(지금 자리를 비운 것 같습니다 — 잠시 후 다시 말을 걸어 보세요)"
             info = describe_error(e, where="npc")
             meta = {"error": info["code"], "correlation_id": info["correlation_id"]}
