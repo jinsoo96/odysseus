@@ -1,24 +1,26 @@
 """메신저 — 등장인물별 스레드 조회 + 메시지 전송(NPC 응답 생성).
 
-전송은 동기 처리: 응답이 완성되면 [사용자 메시지, NPC 응답] 두 건을 돌려준다.
-클라이언트는 대기 중 '입력 중…' 표시로 메신저의 결을 살린다.
+동일한 응시/인물 스레드는 Redis lease로 직렬화한다. 따라서 API replica가 여러 개여도
+두 NPC 답변이 같은 history를 보고 동시에 생성되어 순서가 뒤집히지 않는다.
 """
 
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai import npc
 from ..ai import provider as ai_provider
-from ..db import get_db
-from ..deps import get_current_user
-from ..guests import guest_chat_gate
-from ..ratelimit import enforce
 from ..ai.errors import describe_error
 from ..config import settings
-from ..models import Assessment, Event, MessengerMessage, User
+from ..db import get_db
+from ..definitions import definition_for_attempt, provider_id
+from ..deps import get_current_user
+from ..guests import guest_chat_gate
+from ..locks import acquire_lease
+from ..models import Attempt, Event, MessengerMessage, User
+from ..ratelimit import enforce
 from ..schemas import MessengerMessageOut, MessengerSendIn
 from .attempts import get_attempt_for, require_own_active, scenario_in_attempt
 
@@ -70,81 +72,100 @@ async def send_message(
     attempt = await require_own_active(attempt_id, user, db)
     scenario = await scenario_in_attempt(attempt, scenario_id, db, user, mutate=True)
     character = _find_character(scenario, character_key)
-    # ODY-010: 응시별 속도(분당 12, 순간 6)와 총량(LLM 비용 예산)
     enforce(f"messenger:{attempt_id}", per_min=12, burst=6, what="메시지 전송")
     await guest_chat_gate(db, user, attempt_id, what="메시지 전송")
-    sent = (
-        await db.execute(
-            select(func.count(MessengerMessage.id)).where(
-                MessengerMessage.attempt_id == attempt_id, MessengerMessage.sender == "candidate"
-            )
-        )
-    ).scalar() or 0
-    if sent >= settings.messenger_max_per_attempt:
-        raise HTTPException(429, f"이 시험에서 보낼 수 있는 메시지 한도({settings.messenger_max_per_attempt}건)에 도달했습니다")
 
-    assessment = await db.get(Assessment, attempt.assessment_id)
-    res = await ai_provider.resolve_ai(db, "chat", override_provider_id=assessment.npc_provider_id)
-    if res is None or not res.configured:
-        raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
-
-    user_msg = MessengerMessage(
-        attempt_id=attempt_id,
-        scenario_id=scenario_id,
-        character_key=character_key,
-        sender="candidate",
-        content=body.content,
+    # 동일 NPC 대화는 한 턴씩 처리한다. 서로 다른 NPC는 병렬 대화할 수 있다.
+    lease = await acquire_lease(
+        f"messenger-turn:{attempt_id}:{scenario_id}:{character_key}", ttl_s=3 * 60
     )
-    db.add(user_msg)
-    db.add(
-        Event(
-            attempt_id=attempt_id,
-            scenario_id=scenario_id,
-            type="msg_sent",
-            payload={"character": character_key, "chars": len(body.content)},
-        )
-    )
-    await db.commit()
-
-    history = (
-        await db.execute(
-            select(MessengerMessage)
-            .where(
-                MessengerMessage.attempt_id == attempt_id,
-                MessengerMessage.scenario_id == scenario_id,
-                MessengerMessage.character_key == character_key,
-            )
-            .order_by(MessengerMessage.created_at)
-        )
-    ).scalars().all()
+    if lease is None:
+        raise HTTPException(409, "이 대화방의 이전 메시지를 처리 중입니다. 답변이 온 뒤 다시 보내세요")
 
     try:
-        reply = await npc.generate_reply(res, scenario, character, list(history))
-        meta: dict = {}
-    except Exception as e:  # noqa: BLE001 — 오류는 코드·상관 ID 로만 남긴다 (ODY-022)
-        reply = "(지금 자리를 비운 것 같습니다 — 잠시 후 다시 말을 걸어 보세요)"
-        info = describe_error(e, where="npc")
-        meta = {"error": info["code"], "correlation_id": info["correlation_id"]}
+        # 총 메시지 한도 예약은 Attempt 행 잠금 아래에서 수행해 서로 다른 NPC로 동시에 보내도 초과하지 않는다.
+        await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
+        sent = (
+            await db.execute(
+                select(func.count(MessengerMessage.id)).where(
+                    MessengerMessage.attempt_id == attempt_id, MessengerMessage.sender == "candidate"
+                )
+            )
+        ).scalar() or 0
+        if sent >= settings.messenger_max_per_attempt:
+            await db.rollback()
+            raise HTTPException(
+                429,
+                f"이 시험에서 보낼 수 있는 메시지 한도({settings.messenger_max_per_attempt}건)에 도달했습니다",
+            )
 
-    npc_msg = MessengerMessage(
-        attempt_id=attempt_id,
-        scenario_id=scenario_id,
-        character_key=character_key,
-        sender="npc",
-        content=reply,
-        model=res.model,
-        meta=meta,
-    )
-    db.add(npc_msg)
-    db.add(
-        Event(
+        definition = await definition_for_attempt(db, attempt, persist_legacy=False)
+        res = await ai_provider.resolve_ai(
+            db, "chat", override_provider_id=provider_id(definition, "npc_provider_id")
+        )
+        if res is None or not res.configured:
+            await db.rollback()
+            raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
+
+        user_msg = MessengerMessage(
             attempt_id=attempt_id,
             scenario_id=scenario_id,
-            type="msg_received",
-            payload={"character": character_key, "chars": len(reply), "error": meta.get("error")},
+            character_key=character_key,
+            sender="candidate",
+            content=body.content,
         )
-    )
-    await db.commit()
-    await db.refresh(user_msg)
-    await db.refresh(npc_msg)
-    return [user_msg, npc_msg]
+        db.add(user_msg)
+        db.add(
+            Event(
+                attempt_id=attempt_id,
+                scenario_id=scenario_id,
+                type="msg_sent",
+                payload={"character": character_key, "chars": len(body.content)},
+            )
+        )
+        await db.commit()
+
+        history = (
+            await db.execute(
+                select(MessengerMessage)
+                .where(
+                    MessengerMessage.attempt_id == attempt_id,
+                    MessengerMessage.scenario_id == scenario_id,
+                    MessengerMessage.character_key == character_key,
+                )
+                .order_by(MessengerMessage.created_at)
+            )
+        ).scalars().all()
+
+        try:
+            reply = await npc.generate_reply(res, scenario, character, list(history))
+            meta: dict = {}
+        except Exception as e:  # noqa: BLE001 — 오류는 코드·상관 ID 로만 남긴다 (ODY-022)
+            reply = "(지금 자리를 비운 것 같습니다 — 잠시 후 다시 말을 걸어 보세요)"
+            info = describe_error(e, where="npc")
+            meta = {"error": info["code"], "correlation_id": info["correlation_id"]}
+
+        npc_msg = MessengerMessage(
+            attempt_id=attempt_id,
+            scenario_id=scenario_id,
+            character_key=character_key,
+            sender="npc",
+            content=reply,
+            model=res.model,
+            meta=meta,
+        )
+        db.add(npc_msg)
+        db.add(
+            Event(
+                attempt_id=attempt_id,
+                scenario_id=scenario_id,
+                type="msg_received",
+                payload={"character": character_key, "chars": len(reply), "error": meta.get("error")},
+            )
+        )
+        await db.commit()
+        await db.refresh(user_msg)
+        await db.refresh(npc_msg)
+        return [user_msg, npc_msg]
+    finally:
+        await lease.release()
