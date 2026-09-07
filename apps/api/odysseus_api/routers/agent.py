@@ -11,21 +11,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai import agent as agent_ai
 from ..ai import provider as ai_provider
+from ..ai.errors import describe_error, public_meta
 from ..config import settings
 from ..db import SessionLocal, get_db
 from ..deps import get_current_user
 from ..guests import guest_chat_gate
-from ..ratelimit import enforce
-from ..ai.errors import describe_error, public_meta
+from ..locks import acquire_lease
 from ..models import AgentMessage, Assessment, Attempt, Event, User
+from ..ratelimit import enforce
 from ..schemas import AgentMessageOut, AgentSendIn, AgentUsageOut
 from .attempts import get_attempt_for, require_own_active, scenario_in_attempt
 
 router = APIRouter(tags=["agent"])
-
-
-# 응시별 '지금 도는 에이전트 턴' — 프로세스 안 잠금 (api 는 단일 인스턴스)
-_turn_locks: dict[uuid.UUID, asyncio.Lock] = {}
 
 
 async def _used_turns(db: AsyncSession, attempt_id: uuid.UUID) -> int:
@@ -106,24 +103,23 @@ async def send_agent_message(
     if res is None or not res.configured:
         raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
 
-    max_turns = int(assessment.agent_max_turns)  # 잠금·롤백 뒤에는 ORM 객체를 건드리지 않는다 (expired → MissingGreenlet)
+    max_turns = int(assessment.agent_max_turns)
 
-    # ODY-019: 응시 1건에 에이전트 턴은 한 번에 하나 — 진행 중이면 409
-    turn_lock = _turn_locks.setdefault(attempt_id, asyncio.Lock())
-    if turn_lock.locked():
+    # ODY-019+: 응시 1건에 에이전트 턴은 한 번에 하나. 프로세스-local asyncio.Lock은
+    # API replica가 둘 이상이면 무력해지므로 Redis lease를 소유권으로 쓴다.
+    turn_lease = await acquire_lease(f"agent-turn:{attempt_id}", ttl_s=15 * 60)
+    if turn_lease is None:
         raise HTTPException(409, "이미 진행 중인 에이전트 요청이 있습니다. 끝난 뒤 다시 보내세요")
-    await turn_lock.acquire()
+
     reserved = False
     try:
         # 한도 예약을 원자적으로: 응시 행을 잠근 채 COUNT → 사용자 메시지 INSERT → COMMIT.
-        # 잠금이 풀리기 전에는 다른 요청이 같은 COUNT 를 볼 수 없다.
         await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
         used = await _used_turns(db, attempt_id)
         if used >= max_turns:
-            await db.rollback()  # 행 잠금을 바로 놓는다
+            await db.rollback()
             raise HTTPException(429, f"에이전트 사용 한도({max_turns}회)를 모두 사용했습니다")
 
-        # 대화 이력 (텍스트만 — 도구 상세는 재주입하지 않는다)
         history = (
             await db.execute(
                 select(AgentMessage)
@@ -147,11 +143,11 @@ async def send_agent_message(
                 payload={"chars": len(body.content), "turn": used + 1, "max": max_turns},
             )
         )
-        await db.commit()  # 예약 확정 — 여기서 행 잠금이 풀린다
+        await db.commit()
         reserved = True
     finally:
         if not reserved:
-            turn_lock.release()
+            await turn_lease.release()
 
     user_id = user.id
 
@@ -159,7 +155,7 @@ async def send_agent_message(
         async with SessionLocal() as s:
             meta: dict = {"steps": steps}
             if error:
-                meta["error"] = error  # 코드만 저장한다 — 원본 예외는 로그에
+                meta["error"] = error
                 if correlation_id:
                     meta["correlation_id"] = correlation_id
             msg = AgentMessage(
@@ -192,7 +188,7 @@ async def send_agent_message(
                         yield f"data: {json.dumps({'tool': ev['tool']}, ensure_ascii=False)}\n\n"
                     elif "steps" in ev:
                         steps = ev["steps"]
-            except Exception as e:  # noqa: BLE001 — 응시자에게는 코드·일반 설명·상관 ID 만 (ODY-022)
+            except Exception as e:  # noqa: BLE001
                 info = describe_error(e, where="agent")
                 error = info["code"]
                 correlation_id = info["correlation_id"]
@@ -203,8 +199,7 @@ async def send_agent_message(
         finally:
             if not persisted:
                 asyncio.get_running_loop().create_task(persist(parts, steps, error or "AI_BACKEND_ERROR", correlation_id))
-            if turn_lock.locked():
-                turn_lock.release()  # 이 응시의 다음 턴을 허용한다 (ODY-019)
+            await turn_lease.release()
 
     return StreamingResponse(
         event_stream(),
