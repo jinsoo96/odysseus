@@ -16,7 +16,8 @@ import worker as legacy
 _REAL_EXECUTE = legacy.execute
 CONTAINER_MEM_MB = int(os.environ.get("RUNNER_MEM_MB", "4096"))
 DEFAULT_EXEC_MEM_MB = max(512, int(CONTAINER_MEM_MB * 0.8 / max(1, legacy.CONCURRENCY)))
-EXEC_MEM_MB = max(256, int(os.environ.get("RUNNER_EXEC_MEM_MB", str(DEFAULT_EXEC_MEM_MB))))
+_raw_exec_mem = os.environ.get("RUNNER_EXEC_MEM_MB", "").strip()
+EXEC_MEM_MB = max(256, int(_raw_exec_mem or DEFAULT_EXEC_MEM_MB))
 
 
 def guarded_execute(*args, **kwargs):
@@ -38,7 +39,6 @@ def guarded_execute(*args, **kwargs):
                         legacy.kill_tree(proc)
                         return
                 except Exception:
-                    # Container memory limit remains the hard safety boundary if /proc sampling fails.
                     pass
                 time.sleep(0.1)
 
@@ -58,8 +58,6 @@ def guarded_execute(*args, **kwargs):
     return result
 
 
-# worker.run_job resolves its imported function through module globals, so patching this one symbol
-# applies the guard without duplicating sandbox execution/collection logic.
 legacy.execute = guarded_execute
 
 if __name__ == "__main__":
