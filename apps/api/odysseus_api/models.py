@@ -259,6 +259,8 @@ class Execution(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     source: Mapped[str] = mapped_column(String(10), default="ide")  # ide | agent | check
     command: Mapped[str] = mapped_column(Text)
+    # 실행 요청 당시 workspace payload. Redis 전달 장애/재시작에도 정확히 같은 입력을 재생한다.
+    input_files: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued | running | done | error
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stdout: Mapped[str | None] = mapped_column(Text, nullable=True)

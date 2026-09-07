@@ -65,8 +65,10 @@ deliberately scattered across people and files.
    you did not compute from the data. Write the computed values into
    `objectives_md` too, so graders can see them.
 6. **`objectives_md` is the hidden truth.** State the real requirements, the
-   trap, and the exact expected results. It is shown only to NPCs and graders,
-   never to the candidate.
+   trap, and the exact expected results. It is used only by server-side grading/
+   requirement derivation and is never shown to NPCs or candidates. Every fact
+   the candidate must discover must therefore also exist in a character's
+   `knowledge` or an initial file.
 7. **Briefing is narrative, not instructions.** 4–7 short paragraphs in
    Korean, like the opening of a novel: time of day, who the candidate is (new
    to the team, N weeks in), what just happened, and that a message is waiting

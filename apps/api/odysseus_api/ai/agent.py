@@ -234,12 +234,15 @@ async def execute_agent_tool(
                 command = validate_command(str(tool_input.get("command", "")), settings.run_command_max_len)
             except Exception as e:  # noqa: BLE001 — 도구 결과로 돌려준다
                 return f"거부됨: {getattr(e, 'detail', '명령이 올바르지 않습니다')}", str(tool_input.get("command", ""))[:60]
+            rows = await ws.list_files(db, attempt_id, scenario_id)
+            input_files = ws.files_payload(rows)
             execution = Execution(
                 attempt_id=attempt_id,
                 scenario_id=scenario_id,
                 user_id=user_id,
                 source="agent",
                 command=command,
+                input_files=input_files,
                 callback_token=new_callback_token(),
             )
             db.add(execution)
@@ -252,11 +255,10 @@ async def execute_agent_tool(
                 )
             )
             await db.commit()
-            rows = await ws.list_files(db, attempt_id, scenario_id)
             await enqueue_run(
                 str(execution.id),
                 command,
-                ws.files_payload(rows),
+                execution.input_files or [],
                 settings.run_timeout_s,
                 attempt_id=str(attempt_id),
                 scenario_id=str(scenario_id),

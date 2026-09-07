@@ -120,6 +120,7 @@ async def run_checks(
                     user_id=attempt.user_id,
                     source="check",
                     command=command,
+                    input_files=ws.files_payload(files),
                     callback_token=new_callback_token(),
                 )
                 db.add(execution)
@@ -127,7 +128,7 @@ async def run_checks(
                 await enqueue_run(
                     str(execution.id),
                     command,
-                    ws.files_payload(files),
+                    execution.input_files or [],
                     settings.run_timeout_s,
                     attempt_id=str(attempt.id),
                     scenario_id=str(execution.scenario_id),
