@@ -77,7 +77,7 @@ async def run_command(
     await db.refresh(execution)
 
     try:
-        await enqueue_run(
+        delivered = await enqueue_run(
             str(execution.id),
             command,
             execution.input_files or [],
@@ -87,7 +87,19 @@ async def run_command(
             source=execution.source,
             callback_token=execution.callback_token or "",
         )
+        if not delivered:
+            db.add(
+                Event(
+                    attempt_id=attempt_id,
+                    scenario_id=scenario_id,
+                    type="run_enqueue_delayed",
+                    payload={"execution_id": str(execution.id), "reason": "redis_unavailable_or_already_pending"},
+                )
+            )
+            await db.commit()
     except Exception as exc:
+        # Programming/serialization errors still surface in telemetry while leaving the durable row for
+        # the reconciler. Transient Redis errors are normally converted to delivered=False in runqueue.
         db.add(
             Event(
                 attempt_id=attempt_id,
