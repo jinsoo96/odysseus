@@ -110,6 +110,7 @@ async def attempt_detail(attempt_id: uuid.UUID, db: AsyncSession = Depends(get_d
                 "objectives_md": scenario.objectives_md,
                 "checks": scenario.checks,
                 "rubric": scenario.rubric,
+                "requirement_graph": scenario.requirement_graph,
                 "characters": scenario.characters,
                 "initial_files": [f.get("path") for f in (scenario.initial_files or [])],
             }

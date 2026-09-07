@@ -181,7 +181,7 @@ def graph_metrics(graph: dict, *, contacted_characters: set[str], passed_check_i
     if not requirements:
         return {
             "requirement_count": 0,
-            "stakeholder_discovery_pct": None,
+            "source_contact_pct": None,
             "validation_pct": None,
             "critical_validation_pct": None,
         }
@@ -214,7 +214,7 @@ def graph_metrics(graph: dict, *, contacted_characters: set[str], passed_check_i
     pct = lambda n, d: round(n / d * 100.0, 2) if d > 0 else None
     return {
         "requirement_count": len(requirements),
-        "stakeholder_discovery_pct": pct(discovered, discovery_weight),
+        "source_contact_pct": pct(discovered, discovery_weight),
         "validation_pct": pct(validated, validation_weight),
         "critical_validation_pct": pct(critical_validated, critical_weight),
         "contacted_characters": sorted(contacted_characters),

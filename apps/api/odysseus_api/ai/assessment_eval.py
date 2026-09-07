@@ -143,8 +143,9 @@ async def evaluate_frozen_scenario(
     injection_hits = evidence.pop("_injection_hits", [])
     # This section is trusted server-generated context. It gives the qualitative judge a structured
     # view of which stakeholders the candidate actually contacted and which requirements were verified.
-    evidence["server_requirement_graph"] = scenario.requirement_graph
-    evidence["server_requirement_metrics"] = requirement_metrics
+    trusted = evidence.setdefault("trusted", {})
+    trusted["requirement_graph"] = scenario.requirement_graph
+    trusted["requirement_metrics"] = requirement_metrics
     raw = await provider.complete_text(
         res,
         [{"role": "user", "content": json.dumps(evidence, ensure_ascii=False, indent=1)}],
