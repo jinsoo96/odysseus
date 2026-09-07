@@ -35,8 +35,6 @@ async def run_command(
     command = validate_command(body.command, settings.run_command_max_len)
     enforce(f"run:{attempt_id}", per_min=30, burst=10, what="실행 요청")
 
-    # COUNT -> INSERT 사이 race를 막는다. 동일 응시의 실행 admission을 Attempt row로
-    # 직렬화하면 API replica가 여러 개여도 동시 상한을 넘겨 큐에 밀어 넣지 못한다.
     await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
     open_count = (
         await db.execute(
@@ -53,12 +51,17 @@ async def run_command(
             headers={"Retry-After": "2"},
         )
 
+    # Persist exactly what this command is supposed to see before committing the durable Execution.
+    # A Redis outage/restart can then replay this identical input instead of a later workspace state.
+    rows = await ws.list_files(db, attempt_id, scenario_id)
+    input_files = ws.files_payload(rows)
     execution = Execution(
         attempt_id=attempt_id,
         scenario_id=scenario_id,
         user_id=user.id,
         source="ide",
         command=command,
+        input_files=input_files,
         callback_token=new_callback_token(),
     )
     db.add(execution)
@@ -70,17 +73,14 @@ async def run_command(
             payload={"command": command[:200], "actor": "ide"},
         )
     )
-    # PostgreSQL is the durable source of truth. Redis delivery happens after this commit and is
-    # idempotent; queue_recovery repairs the crash/outage window by replaying rows still `queued`.
     await db.commit()
     await db.refresh(execution)
 
-    rows = await ws.list_files(db, attempt_id, scenario_id)
     try:
         await enqueue_run(
             str(execution.id),
             command,
-            ws.files_payload(rows),
+            execution.input_files or [],
             settings.run_timeout_s,
             attempt_id=str(execution.attempt_id),
             scenario_id=str(execution.scenario_id),
@@ -88,8 +88,6 @@ async def run_command(
             callback_token=execution.callback_token or "",
         )
     except Exception as exc:
-        # Do not turn a transient Redis outage into a permanently failed execution. The committed
-        # row stays queued and the reconciler will enqueue it when Redis returns.
         db.add(
             Event(
                 attempt_id=attempt_id,
