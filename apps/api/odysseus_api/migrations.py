@@ -95,9 +95,15 @@ MIGRATIONS: tuple[Migration, ...] = (
 )
 
 
-async def run_schema_migrations(conn: AsyncConnection) -> list[Migration]:
-    """Apply pending migrations under one transaction/advisory lock and return what was applied."""
+async def run_schema_migrations(conn: AsyncConnection, create_all=None) -> list[Migration]:
+    """Apply pending migrations under one transaction/advisory lock and return what was applied.
+
+    create_all(metadata.create_all) 을 넘기면 같은 lock 아래에서 먼저 실행한다 — 동시에 뜨는 replica 가
+    CREATE TABLE 을 서로 부딪히지 않게.
+    """
     await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SCHEMA_MIGRATION_LOCK})
+    if create_all is not None:
+        await conn.run_sync(create_all)
     await conn.execute(
         text(
             """

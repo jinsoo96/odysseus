@@ -260,7 +260,9 @@ class Execution(Base):
     source: Mapped[str] = mapped_column(String(10), default="ide")  # ide | agent | check
     command: Mapped[str] = mapped_column(Text)
     # 실행 요청 당시 workspace payload. Redis 전달 장애/재시작에도 정확히 같은 입력을 재생한다.
-    input_files: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 명령 요청 시점의 워크스페이스 전체(재전송용). 크므로 기본 로드에서 빼고(터미널 폴링이 매번 끌고 오지 않게),
+    # 실행이 끝나면 비운다 — 산출물은 changed_files 와 워크스페이스에 남는다.
+    input_files: Mapped[list | None] = mapped_column(JSONB, nullable=True, deferred=True)
     status: Mapped[str] = mapped_column(String(20), default="queued")  # queued | running | done | error
     exit_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stdout: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -330,3 +332,9 @@ class Evaluation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     evaluator: Mapped[User | None] = relationship()
+
+
+# main 을 거치지 않고 models 만 임포트하는 스크립트도 암호화 타입을 본다 (평문 기록·암호문 노출 방지).
+from .secrets import install_encrypted_types as _install_encrypted_types  # noqa: E402
+
+_install_encrypted_types()

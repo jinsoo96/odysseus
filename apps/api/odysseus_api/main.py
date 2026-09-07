@@ -33,6 +33,7 @@ install_encrypted_types()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 시크릿 길이·자리표시자·운영 데모시드 금지(ODY-001) + DATA_ENCRYPTION_KEY — DB 를 만지기 전에 거부한다
     check_startup_security()
     for i in range(30):
         try:
@@ -40,8 +41,7 @@ async def lifespan(app: FastAPI):
                 # Fresh installations still get the current baseline from metadata. Existing installs
                 # then advance through the durable, versioned migration ledger. The migration runner
                 # owns the cross-replica advisory lock.
-                await conn.run_sync(Base.metadata.create_all)
-                await run_schema_migrations(conn)
+                await run_schema_migrations(conn, create_all=Base.metadata.create_all)
             break
         except Exception:
             if i == 29:

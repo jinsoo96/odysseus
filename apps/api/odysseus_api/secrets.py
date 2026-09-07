@@ -118,27 +118,64 @@ def install_encrypted_types() -> None:
     _installed = True
 
 
+def _is_json_envelope(value: Any) -> bool:
+    return isinstance(value, dict) and set(value) == {JSON_ENVELOPE}
+
+
 async def migrate_encrypted_storage(db: AsyncSession) -> int:
-    """Force legacy rows through encrypted bind processors; idempotent and safe to rerun."""
+    """Rewrite rows that are still plaintext through the encrypted types. Idempotent.
+
+    ORM 으로 읽으면 이미 복호화된 값만 보여 '아직 평문인가' 를 알 수 없다. 원문 컬럼을 text 로 직접 읽어
+    봉투가 아닌 행만 골라 재저장한다 — 매 기동마다 전 행을 새 nonce 로 다시 쓰거나 updated_at 을 건드리지 않는다.
+    """
     if _master_key() is None:
         return 0
-    from sqlalchemy import select
+    from sqlalchemy import text as sql_text
     from .models import AiProvider, AppSetting
 
+    providers: dict[Any, list[str]] = {}
+    rows = (await db.execute(sql_text("SELECT id, api_key, default_headers::text FROM ai_providers"))).all()
+    for pid, api_key, headers in rows:
+        fields: list[str] = []
+        if api_key and not is_encrypted(api_key):
+            fields.append("api_key")
+        if headers:
+            try:
+                parsed = json.loads(headers)
+            except ValueError:
+                parsed = None
+            if parsed and not _is_json_envelope(parsed):
+                fields.append("default_headers")
+        if fields:
+            providers[pid] = fields
+    settings_keys: list[str] = []
+    rows = (await db.execute(sql_text("SELECT key, value::text FROM app_settings"))).all()
+    for key, raw in rows:
+        if raw is None:
+            continue
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if parsed is None or _is_json_envelope(parsed):
+            continue
+        settings_keys.append(key)
+
     changed = 0
-    providers = (await db.execute(select(AiProvider))).scalars().all()
-    for row in providers:
-        if row.api_key:
-            attributes.flag_modified(row, "api_key")
+    for pid, fields in providers.items():
+        row = await db.get(AiProvider, pid)
+        if row is None:
+            continue
+        for field in fields:
+            attributes.flag_modified(row, field)
             changed += 1
-        if row.default_headers:
-            attributes.flag_modified(row, "default_headers")
-            changed += 1
-    app_settings = (await db.execute(select(AppSetting))).scalars().all()
-    for row in app_settings:
-        if row.value is not None:
-            attributes.flag_modified(row, "value")
-            changed += 1
+    for key in settings_keys:
+        row = await db.get(AppSetting, key)
+        if row is None:
+            continue
+        attributes.flag_modified(row, "value")
+        changed += 1
     if changed:
         await db.commit()
+        print(f"[secrets] {changed}개 평문 비밀값을 암호화 봉투로 재저장했습니다", flush=True)
     return changed
