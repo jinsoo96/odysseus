@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +12,8 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..db import get_db
 from ..deps import require_admin, require_staff
-from ..models import AssessmentScenario, Scenario, User
+from ..models import AssessmentScenario, Attempt, Scenario, User
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
-from pydantic import BaseModel, Field
 
 
 class AuthorChatIn(BaseModel):
@@ -31,6 +31,7 @@ class AuthorIn(BaseModel):
     draft: ScenarioIn | None = None
     instruction: str | None = Field(default=None, max_length=4000)
     provider_id: uuid.UUID | None = None
+
 
 router = APIRouter(prefix="/scenarios", tags=["scenarios"])
 
@@ -70,6 +71,27 @@ def _apply(row: Scenario, body: ScenarioIn) -> None:
     row.agent_enabled = body.agent_enabled
 
 
+async def _used_by_attempt(scenario_id: uuid.UUID, db: AsyncSession) -> bool:
+    """이 시나리오를 포함한 시험으로 응시가 한 번이라도 시작됐는지 확인한다."""
+    row = (
+        await db.execute(
+            select(Attempt.id)
+            .join(AssessmentScenario, AssessmentScenario.assessment_id == Attempt.assessment_id)
+            .where(AssessmentScenario.scenario_id == scenario_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return row is not None
+
+
+async def _require_mutable(scenario_id: uuid.UUID, db: AsyncSession) -> None:
+    if await _used_by_attempt(scenario_id, db):
+        raise HTTPException(
+            409,
+            "응시 기록에서 사용된 시나리오는 수정할 수 없습니다. 새 시나리오로 복제해 변경하세요",
+        )
+
+
 @router.get("", response_model=list[ScenarioSummary])
 async def list_scenarios(db: AsyncSession = Depends(get_db), _=Depends(require_staff)):
     rows = (
@@ -95,7 +117,6 @@ async def list_scenarios(db: AsyncSession = Depends(get_db), _=Depends(require_s
 async def author_with_ai(
     body: AuthorIn, db: AsyncSession = Depends(get_db), _=Depends(require_admin)
 ):
-    """시나리오 전체를 AI 가 설계한다. 저장은 하지 않는다 — 스튜디오에 채워 주고 사람이 확인한다."""
     from ..ai import provider as ai_provider
     from ..ai.scenario_author import author_scenario
 
@@ -114,7 +135,7 @@ async def author_with_ai(
     except ValueError as e:
         info = describe_error(e, where="author")
         raise HTTPException(502, f"{info['message']} (참조: {info['correlation_id']})")
-    except Exception as e:  # noqa: BLE001 — 공급자 오류를 그대로 보여 준다
+    except Exception as e:  # noqa: BLE001
         info = describe_error(e, where="author")
         raise HTTPException(502, f"{info['message']} (참조: {info['correlation_id']})")
     return {"scenario": scenario, "notes": notes, "warnings": warnings, "provider": res.name}
@@ -122,7 +143,6 @@ async def author_with_ai(
 
 @router.post("/author/stream")
 async def author_chat(body: AuthorChatIn, db: AsyncSession = Depends(get_db), _=Depends(require_admin)):
-    """여러 턴에 걸쳐 시나리오를 설계·고도화한다. 편집 명령을 검증해 실시간으로 흘려보낸다."""
     import json as _json
 
     from ..ai import provider as ai_provider
@@ -151,7 +171,6 @@ async def rubric_default(_=Depends(require_staff)):
 
 @router.get("/npc-default-prompt")
 async def npc_default_prompt(_=Depends(require_staff)):
-    """전역 NPC 기본 규칙 — 시나리오가 비워 두면 이것이 쓰인다. 편집기의 '기본값 불러오기' 가 읽는다."""
     from ..ai.npc_prompt import BASE_RULES
 
     return {"prompt": BASE_RULES}
@@ -185,6 +204,7 @@ async def update_scenario(
     row = await db.get(Scenario, scenario_id)
     if not row:
         raise HTTPException(404, "시나리오를 찾을 수 없습니다")
+    await _require_mutable(scenario_id, db)
     _validate(body)
     _apply(row, body)
     await db.commit()
@@ -199,13 +219,16 @@ async def delete_scenario(
     row = await db.get(Scenario, scenario_id)
     if not row:
         raise HTTPException(404, "시나리오를 찾을 수 없습니다")
+    if await _used_by_attempt(scenario_id, db):
+        row.is_archived = True
+        await db.commit()
+        return {"ok": True, "archived": True}
     used = (
         await db.execute(
             select(func.count(AssessmentScenario.id)).where(AssessmentScenario.scenario_id == scenario_id)
         )
     ).scalar() or 0
     if used:
-        # 시험에 연결된 시나리오는 기록 보존을 위해 삭제 대신 보관 처리
         row.is_archived = True
         await db.commit()
         return {"ok": True, "archived": True}
