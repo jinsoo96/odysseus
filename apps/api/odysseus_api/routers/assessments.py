@@ -45,6 +45,30 @@ async def _load(assessment_id: uuid.UUID, db: AsyncSession) -> Assessment:
     return row
 
 
+async def _attempt_count(assessment_id: uuid.UUID, db: AsyncSession) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count(Attempt.id)).where(Attempt.assessment_id == assessment_id)
+            )
+        ).scalar()
+        or 0
+    )
+
+
+async def _require_mutable(assessment_id: uuid.UUID, db: AsyncSession) -> None:
+    """응시가 시작된 시험 정의는 과거 평가의 기준이므로 제자리 수정하지 않는다.
+
+    완전한 revision 모델을 도입하기 전까지의 안전한 규칙이다. 사용된 시험을 바꾸고 싶다면
+    새 시험을 복제/생성해야 하며, 기존 Attempt가 가리키는 정의는 영구히 고정된다.
+    """
+    if await _attempt_count(assessment_id, db):
+        raise HTTPException(
+            409,
+            "응시 기록이 있는 시험은 수정하거나 삭제할 수 없습니다. 새 시험으로 복제해 변경하세요",
+        )
+
+
 def _to_out(a: Assessment) -> AssessmentOut:
     return AssessmentOut(
         id=a.id,
@@ -86,7 +110,7 @@ async def _apply_relations(row: Assessment, body: AssessmentIn, db: AsyncSession
             raise HTTPException(400, f"존재하지 않는 시나리오: {link.scenario_id}")
     row.scenarios.clear()
     row.assignments.clear()
-    await db.flush()  # clear 후 재추가 시 유니크 위반 방지
+    await db.flush()
     for i, link in enumerate(body.scenarios):
         row.scenarios.append(
             AssessmentScenario(scenario_id=link.scenario_id, ordinal=i, points=link.points)
@@ -166,6 +190,7 @@ async def update_assessment(
     assessment_id: uuid.UUID, body: AssessmentIn, db: AsyncSession = Depends(get_db), _=Depends(require_admin)
 ):
     row = await _load(assessment_id, db)
+    await _require_mutable(assessment_id, db)
     await _validate_providers(body, db)
     row.title = body.title
     row.description = body.description
@@ -185,6 +210,7 @@ async def delete_assessment(assessment_id: uuid.UUID, db: AsyncSession = Depends
     row = await db.get(Assessment, assessment_id)
     if not row:
         raise HTTPException(404, "시험을 찾을 수 없습니다")
+    await _require_mutable(assessment_id, db)
     await db.delete(row)
     await db.commit()
     return {"ok": True}
