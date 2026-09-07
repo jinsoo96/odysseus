@@ -21,6 +21,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm -f NOOP NOOP2 NOOP3 .github/workflows/cleanup-noop.yml
+          git rm -f --ignore-unmatch .github/PR_NOTES.md NOOP NOOP2 NOOP3 .github/workflows/cleanup-noop.yml
+          if git diff --cached --quiet; then
+            echo "temporary files already absent"
+            exit 0
+          fi
           git commit -m "chore: remove temporary PR metadata files"
           git push origin HEAD:improve/assessment-reliability-hardening
