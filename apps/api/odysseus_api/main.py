@@ -8,7 +8,7 @@ from .config import check_startup_security, https_only_enabled, settings
 from .db import Base, SessionLocal, engine
 from .migrations import run_schema_migrations
 from .queue_recovery import recovery_loop
-from .secrets import install_encrypted_types, migrate_encrypted_storage
+from .secrets import install_encrypted_types, migrate_encrypted_storage, report_unreadable_secrets
 from .routers import (
     access,
     agent,
@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
 
     async with SessionLocal() as db:
         await migrate_encrypted_storage(db)
+        await report_unreadable_secrets(db)
         if settings.seed_demo_data:
             await seed_demo_if_empty(db)
         else:
