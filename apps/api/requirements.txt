@@ -1,7 +1,7 @@
 # Public API stack. FastAPI >=0.141.1 accepts Starlette 1.x; older 0.115.x pins the
 # vulnerable Starlette 0.46 line. Keep the framework on the audited 0.141 release line.
 fastapi>=0.141.1,<0.142
-uvicorn[standard]>=0.34,<0.53
+uvicorn[standard]>=0.52.4,<0.53
 sqlalchemy[asyncio]>=2.0.36,<2.1
 asyncpg>=0.30,<0.31
 pydantic>=2.9,<3
