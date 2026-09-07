@@ -30,6 +30,12 @@ jobs:
           ODYSSEUS_ENV: development
           DATA_ENCRYPTION_KEY: ci-data-encryption-key-222222222222222222222222222222222222222222222222222222222222
         run: python -m unittest discover -s tests/unit -p 'test_*.py' -v
+      - name: Import FastAPI application
+        env:
+          PYTHONPATH: apps/api
+          ODYSSEUS_ENV: development
+          DATA_ENCRYPTION_KEY: ci-data-encryption-key-222222222222222222222222222222222222222222222222222222222222
+        run: python -c "from odysseus_api.main import app; assert app.title == 'Odysseus API'"
       - name: Validate compose configuration
         env:
           JWT_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
