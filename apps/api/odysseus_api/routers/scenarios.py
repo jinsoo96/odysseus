@@ -1,4 +1,8 @@
-"""시나리오 CRUD — 관리자 스튜디오의 저장 대상."""
+"""시나리오 CRUD — 관리자 스튜디오의 최신 authoring state.
+
+응시자는 시작 시 고정된 definition snapshot을 사용하므로, 과거 응시를 바꾸지 않고도
+시나리오를 계속 개선할 수 있다. 실제 응시 산출물이 존재하는 시나리오는 삭제 대신 보관한다.
+"""
 
 import uuid
 
@@ -12,21 +16,17 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..db import get_db
 from ..deps import require_admin, require_staff
-from ..models import AssessmentScenario, Attempt, Scenario, User
+from ..models import AssessmentScenario, Scenario, User, WorkspaceFile
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
 
 
 class AuthorChatIn(BaseModel):
-    """대화형 편집 — 이전 턴 전체와 현재 초안을 보낸다."""
-
     messages: list[dict] = Field(min_length=1, max_length=60)
     draft: ScenarioIn | None = None
     provider_id: uuid.UUID | None = None
 
 
 class AuthorIn(BaseModel):
-    """AI 작성 요청 — brief 로 새로 만들거나, draft + instruction 으로 다듬는다."""
-
     brief: str = Field(default="", max_length=6000)
     draft: ScenarioIn | None = None
     instruction: str | None = Field(default=None, max_length=4000)
@@ -71,32 +71,19 @@ def _apply(row: Scenario, body: ScenarioIn) -> None:
     row.agent_enabled = body.agent_enabled
 
 
-async def _used_by_attempt(scenario_id: uuid.UUID, db: AsyncSession) -> bool:
-    """이 시나리오를 포함한 시험으로 응시가 한 번이라도 시작됐는지 확인한다."""
+async def _has_history(scenario_id: uuid.UUID, db: AsyncSession) -> bool:
+    """실제 응시 workspace가 있으면 FK/candidate history 보존을 위해 hard delete하지 않는다."""
     row = (
         await db.execute(
-            select(Attempt.id)
-            .join(AssessmentScenario, AssessmentScenario.assessment_id == Attempt.assessment_id)
-            .where(AssessmentScenario.scenario_id == scenario_id)
-            .limit(1)
+            select(WorkspaceFile.id).where(WorkspaceFile.scenario_id == scenario_id).limit(1)
         )
     ).scalar_one_or_none()
     return row is not None
 
 
-async def _require_mutable(scenario_id: uuid.UUID, db: AsyncSession) -> None:
-    if await _used_by_attempt(scenario_id, db):
-        raise HTTPException(
-            409,
-            "응시 기록에서 사용된 시나리오는 수정할 수 없습니다. 새 시나리오로 복제해 변경하세요",
-        )
-
-
 @router.get("", response_model=list[ScenarioSummary])
 async def list_scenarios(db: AsyncSession = Depends(get_db), _=Depends(require_staff)):
-    rows = (
-        await db.execute(select(Scenario).order_by(Scenario.updated_at.desc()))
-    ).scalars().all()
+    rows = (await db.execute(select(Scenario).order_by(Scenario.updated_at.desc()))).scalars().all()
     return [
         ScenarioSummary(
             id=r.id,
@@ -204,7 +191,6 @@ async def update_scenario(
     row = await db.get(Scenario, scenario_id)
     if not row:
         raise HTTPException(404, "시나리오를 찾을 수 없습니다")
-    await _require_mutable(scenario_id, db)
     _validate(body)
     _apply(row, body)
     await db.commit()
@@ -219,16 +205,12 @@ async def delete_scenario(
     row = await db.get(Scenario, scenario_id)
     if not row:
         raise HTTPException(404, "시나리오를 찾을 수 없습니다")
-    if await _used_by_attempt(scenario_id, db):
-        row.is_archived = True
-        await db.commit()
-        return {"ok": True, "archived": True}
-    used = (
+    linked = (
         await db.execute(
             select(func.count(AssessmentScenario.id)).where(AssessmentScenario.scenario_id == scenario_id)
         )
     ).scalar() or 0
-    if used:
+    if linked or await _has_history(scenario_id, db):
         row.is_archived = True
         await db.commit()
         return {"ok": True, "archived": True}
