@@ -132,6 +132,11 @@ idempotent enqueue를 다시 시도합니다. 이미 Redis에 들어간 executio
 Runner가 작업을 꺼낸 뒤 죽으면 raw job은 `odysseus:run:processing:<RUNNER_ID>`에 남습니다.
 같은 `RUNNER_ID`로 재시작하면 시작 시 processing list를 pending queue로 되돌립니다.
 
+Runner가 `running` callback까지 보낸 뒤 영구적으로 사라지는 경우도 처리합니다. API watchdog은 서버가 기록한
+`run_started` 이벤트 기준으로 정상 sandbox timeout + callback retry 시간을 충분히 넘긴 execution을
+`run_stale_reaped`로 종료하고 callback token을 폐기하며 cancellation tombstone을 남깁니다. 따라서 고아
+`running` 행이 응시자의 동시 실행 슬롯을 영구 점유하지 않습니다.
+
 ### RUNNER_ID 규칙
 
 - 단일 runner: 기본값 `runner-main` 사용 가능
@@ -253,16 +258,20 @@ Redis가 순간적으로 unavailable할 때 rate limiter는 제한 자체를 없
 ## 11. Dependency/CI 안전선
 
 Web runtime은 audited lockfile 기준으로 Next.js `15.5.25`, React/React DOM `19.2.8`을 사용하고 PostCSS
-`8.5.26` override를 적용합니다. Dependabot이 npm/pip/Docker 업데이트를 추적합니다.
+`8.5.26` override를 적용합니다. Backend lockfile은 FastAPI `0.141.1`, Starlette `1.6.0`, lxml `6.1.3` 등
+감사 통과 버전으로 갱신했습니다. Dependabot이 npm/pip/Docker 업데이트를 추적합니다.
 
 PR CI는 다음을 merge gate로 둡니다.
 
 - Python source compile
+- locked dependency closure (`pip check`)
+- 실제 FastAPI application import
 - reliability unit tests
   - definition hash
   - Requirement Graph semantics
   - deterministic score engine
   - AES-GCM encryption/fail-closed
+- Python dependency audit (`pip-audit`)
 - Docker Compose configuration validation
 - locked npm install
 - TypeScript typecheck
