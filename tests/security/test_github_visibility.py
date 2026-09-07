@@ -95,7 +95,8 @@ for fn in ("github_repo", "github_tree", "github_file", "github_clone"):
 search_body = src[src.index("async def github_search("):]
 search_body = search_body[: search_body.find("\n@router")]
 check("github_search 가 is:public 을 붙이고 결과를 필터", "is:public" in search_body and "_public_only(" in search_body)
-check("공개 확인이 콘텐츠 조회보다 먼저", src.index("await _require_public_repo(owner, name, s)\n    clean") < src.index("data = await _github_get(f\"/repos/{owner}/{name}/contents/{clean}\""))
+_fb = src[src.index("async def github_file("):]
+check("공개 확인이 콘텐츠 조회보다 먼저", _fb.index("await _require_public_repo(owner, name, s)") < _fb.index("data = await _github_get(f\"/repos/{owner}/{name}/contents/{clean}\""))
 
 reference._github_get = real_get
 
