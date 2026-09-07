@@ -29,7 +29,7 @@ RUN git config --system user.name "Candidate" \
 RUN mkdir -p /work && chmod 711 /work
 
 WORKDIR /app
-COPY worker.py reliable_worker.py sandbox.py probe.py resources.py ./
+COPY worker.py reliable_worker.py hardened_entrypoint.py sandbox.py probe.py resources.py ./
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python3", "reliable_worker.py"]
+CMD ["python3", "hardened_entrypoint.py"]
