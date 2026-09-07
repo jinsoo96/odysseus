@@ -96,20 +96,23 @@ def bind_definition(attempt: Attempt, definition: dict) -> None:
     attempt.snapshot = snap
 
 
-async def definition_for_attempt(db: AsyncSession, attempt: Attempt) -> dict:
+async def definition_for_attempt(
+    db: AsyncSession, attempt: Attempt, *, persist_legacy: bool = True
+) -> dict:
     snap = attempt.snapshot or {}
     frozen = snap.get(DEFINITION_KEY)
     if isinstance(frozen, dict) and frozen.get("scenarios") is not None:
         return _json_copy(frozen)
 
-    # Legacy attempts predate definition snapshots. Keep them readable; the first new write/evaluation
-    # should persist a snapshot so subsequent reads become reproducible.
+    # Legacy attempts predate definition snapshots. Keep them readable and bind the current definition
+    # once. Callers holding a FOR UPDATE transaction can disable the internal commit and commit later.
     assessment = await db.get(Assessment, attempt.assessment_id)
     if not assessment:
         raise LookupError("assessment not found for attempt")
     definition = await build_assessment_definition(db, assessment)
     bind_definition(attempt, definition)
-    await db.commit()
+    if persist_legacy:
+        await db.commit()
     return definition
 
 
