@@ -1,0 +1,26 @@
+name: Cleanup temporary files
+
+on:
+  push:
+    branches:
+      - improve/assessment-reliability-hardening
+    paths:
+      - .github/workflows/cleanup-noop.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: improve/assessment-reliability-hardening
+      - name: Remove temporary files and this workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f NOOP NOOP2 NOOP3 .github/workflows/cleanup-noop.yml
+          git commit -m "chore: remove temporary PR metadata files"
+          git push origin HEAD:improve/assessment-reliability-hardening
