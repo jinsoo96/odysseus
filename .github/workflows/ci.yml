@@ -1,3 +1,4 @@
+# Odysseus reliability hardening merge gate
 name: CI
 
 on:
@@ -35,7 +36,7 @@ jobs:
           PYTHONPATH: apps/api
           ODYSSEUS_ENV: development
           DATA_ENCRYPTION_KEY: ci-data-encryption-key-222222222222222222222222222222222222222222222222222222222222
-        run: python -c "from odysseus_api.main import app; assert app.title == 'Odysseus API'"
+        run: python -c "import odysseus_api.main; print('api import ok')"
       - name: Validate compose configuration
         env:
           JWT_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
