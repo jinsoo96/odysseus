@@ -194,8 +194,9 @@ async def eval_providers(db: AsyncSession = Depends(get_db)):
 @router.post("/attempts/{attempt_id}/checks")
 async def run_scenario_checks(attempt_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     """종료된 응시에 대해 frozen checks만 실행한다 — 현재 스튜디오의 수정값은 읽지 않는다."""
+    # 결정적 checks 는 LLM 이 없고 워크스페이스를 바꾸지 않는다 — 진행 중 미리보기(참조 해답 검증 등)를 막지 않는다.
+    # 최종 점수에 남는 autoeval/evaluate 만 제출·종료 뒤로 제한한다 (_require_final).
     attempt = await _load_attempt(attempt_id, db)
-    _require_final(attempt)
     definition = await definition_for_attempt(db, attempt)
     out = []
     for spec in sorted(definition.get("scenarios") or [], key=lambda x: int(x.get("ordinal", 0) or 0)):

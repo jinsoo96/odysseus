@@ -42,8 +42,13 @@ def new_attempt(title_part):
 
 
 def run(aid, sid, command, timeout_s=30):
-    ex = ad.post(f"{API}/attempts/{aid}/scenarios/{sid}/run",
-                 json={"command": command, "timeout_s": timeout_s}).json()
+    for _ in range(20):
+        r = ad.post(f"{API}/attempts/{aid}/scenarios/{sid}/run",
+                    json={"command": command, "timeout_s": timeout_s})
+        if r.status_code != 429:  # 실행 속도 제한(ODY-010)은 이 검사의 대상이 아니다 — 잠시 뒤 다시
+            break
+        time.sleep(2)
+    ex = r.json()
     for _ in range(90):
         time.sleep(0.5)
         d = ad.get(f"{API}/executions/{ex['id']}").json()

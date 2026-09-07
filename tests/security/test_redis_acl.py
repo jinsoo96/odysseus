@@ -52,8 +52,10 @@ check("default 사용자는 꺼져 있다", d, msg)
 print("\n── runner 계정 ──")
 r = redis.Redis(host=host, port=port, username="runner", password=runner_pw, decode_responses=True)
 check("runner PING", r.ping() is True)
-d, msg = denied(lambda: r.lpush("odysseus:run:queue", json.dumps({"execution_id": "forged"})))
-check("runner 는 큐에 넣을 수 없다 (LPUSH)", d, msg)
+# LPUSH 는 콜백 실패 시 되돌려 넣기용으로 허용된다 — 위조 적재는 HMAC 서명 검증(runqueue.sign_job)이 막는다.
+# 대신 자기 prefix 밖으로는 여전히 아무것도 못 넣는다.
+d, msg = denied(lambda: r.lpush("odysseus:lease:forged", "x"))
+check("runner 는 prefix 밖 리스트에 넣을 수 없다 (LPUSH)", d, msg)
 d, msg = denied(lambda: r.keys("*"))
 check("runner 는 KEYS 불가", d, msg)
 d, msg = denied(lambda: r.flushall())

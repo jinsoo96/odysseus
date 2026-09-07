@@ -97,9 +97,12 @@ async def _validate_providers(body: AssessmentIn, db: AsyncSession) -> None:
 
 
 async def _apply_relations(row: Assessment, body: AssessmentIn, db: AsyncSession) -> None:
+    # 보관된 시나리오는 새로 연결할 수 없지만, 이미 이 시험에 들어 있는 것은 유지한다 —
+    # 그렇지 않으면 시나리오 하나가 보관되는 순간 배정 변경 같은 편집이 전부 400 이 된다.
+    already = {link.scenario_id for link in row.scenarios}
     for link in body.scenarios:
         scenario = await db.get(Scenario, link.scenario_id)
-        if not scenario or scenario.is_archived:
+        if not scenario or (scenario.is_archived and link.scenario_id not in already):
             raise HTTPException(400, f"존재하지 않거나 보관된 시나리오: {link.scenario_id}")
     row.scenarios.clear()
     row.assignments.clear()

@@ -93,7 +93,7 @@ st, r = post([{"type": "paste", "scenario_id": sid, "payload": {"seq": 2, "text"
 check("payload 는 허용 키만·길이 제한", st == 200 and r.get("recorded") == 1, r)
 p = [e for e in events() if e["type"] == "paste"][-1]["payload"]
 check("허용되지 않은 키 제거", "evil" not in p and "__proto__" not in p, p.keys())
-check("text 는 500자로 잘림", len(p.get("text", "")) == 500, len(p.get("text", "")))
+check("클립보드 원문(text)은 저장하지 않고 글자 수만 남긴다", "text" not in p and p.get("chars") == 5000, p)
 
 print("\n── 순서 번호: 중복·재생은 버리고 빈틈은 서버가 기록 ──")
 st, r = post([{"type": "tab_visible", "scenario_id": sid, "payload": {"seq": 2}}])

@@ -70,6 +70,9 @@ def combine_scores(
         deterministic_weight = DEFAULT_DETERMINISTIC_RESULT_WEIGHT
     if deterministic_pct is None:
         deterministic_weight = 0.0
+    elif qualitative_result_total <= 0:
+        # rubric 에 정성 result 항목이 없으면 '0점짜리 30%' 를 섞지 않는다 — checks 가 result 전부다.
+        deterministic_weight = 100.0
     qualitative_weight = 100.0 - deterministic_weight
     result_pct = (
         (deterministic_pct or 0.0) * deterministic_weight
