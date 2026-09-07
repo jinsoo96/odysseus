@@ -52,7 +52,11 @@ curl -sS -H 'Content-Type: application/json' \
 ## 조치 (2026-09-04, 완료)
 
 - **경계:** 엣지 nginx 가 `/api/internal/` 을 토큰과 무관하게 404 로 막는다 (`apps/edge/nginx.conf`). api 컨테이너의 호스트 포트는 `127.0.0.1` 에만 묶인다 (`docker-compose.yml`). 라우터는 `X-Forwarded-*`/`Via` 등 프록시 흔적이 있는 요청을 404 로 거부한다 — 내부 호출자(러너·MCP 브리지)는 프록시를 지나지 않는다.
-- **토큰:** 코드·compose 의 기본값 `odysseus-internal-change-me` 를 제거했다. compose 는 `JWT_SECRET`/`INTERNAL_TOKEN` 이 없으면 `${VAR:?}` 로 멈추고, 운영 모드의 api 는 자리표시자·32자 미만 값을 기동 시 거부한다 (`config.check_startup_security`). 러너도 32자 미만이면 기동하지 않는다. 비교는 `secrets.compare_digest`.
+- **토큰:** 옛 기본값 `odysseus-internal-change-me` 를 제거하고 비교를 `secrets.compare_digest` 로 바꿨다. 러너는 32자 미만이면 기동하지 않는다.
+
+  > **2026-09-07 정책 변경 (제품 결정):** 받자마자 도는 것이 배포판의 기본값이어야 하므로, `JWT_SECRET`/`INTERNAL_TOKEN`/`DATA_ENCRYPTION_KEY` 에 저장소 공개 기본값을 두고 compose 의 `${VAR:?}` 강제와 api 의 **기동 거부를 없앴다**. 대신 기본값이 남아 있는 동안 기동할 때마다 무엇을 어떻게 바꿔야 하는지 배너로 크게 알린다 (`config.insecure_secrets` / `check_startup_security`), `.env.example`·README·`scripts/deploy.sh` 도 같은 안내를 한다.
+  >
+  > 남는 위험은 **운영자가 기본값인 채로 실운영을 하는 경우**이며, 이는 기동 거부 대신 반복 경고로 다룬다. `SEED_DEMO_DATA` 의 운영 모드 기동 거부(ODY-001)는 그대로 유지된다 — 고정 비밀번호 계정이 실제로 생기는 것은 경고로 대체할 수 없기 때문이다.
 - **범위:** `/internal/agent-tool` 은 시나리오가 그 시험(`AssessmentScenario`)에 속하는지와 `ordinal == attempt.current_ordinal` 인지 다시 확인한다 — 잠긴/제출한 문제는 거부 결과, 시험 밖 시나리오는 404.
 - **일회용 콜백 토큰:** 실행마다 `Execution.callback_token`(32바이트 urlsafe) 을 발급해 큐로만 전달하고, 러너는 `X-Execution-Token` 으로 되돌려 준다. `/running`·`/result` 는 이 토큰이 맞아야 하고, 결과가 접수되면 토큰을 지워 재사용을 막는다. `ExecutionOut` 에는 나가지 않는다.
 - **감사 로그:** 프록시 경유·토큰 불일치·범위 위반을 `odysseus.internal` 로거에 경로·출처와 함께 남기되 토큰 값은 기록하지 않는다.

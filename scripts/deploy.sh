@@ -33,11 +33,11 @@ if [[ -z "${BOOTSTRAP_ADMIN_EMAIL:-}" || -z "${BOOTSTRAP_ADMIN_PASSWORD:-}" ]]; 
   echo ".env 에 BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD 가 필요합니다 (배포 전후 보존 검증에 사용)." >&2
   exit 1
 fi
-# 운영은 DATA_ENCRYPTION_KEY 없이는 api 가 기동을 거부한다 — 컨테이너를 갈아끼운 뒤에 알게 되면 늦다.
-DEK="${DATA_ENCRYPTION_KEY:-}"
-if [[ "${ODYSSEUS_ENV:-production}" != "development" && ${#DEK} -lt 32 ]]; then
-  echo ".env 에 DATA_ENCRYPTION_KEY 가 필요합니다 (\`openssl rand -hex 32\`, 32자 이상). 한 번 정하면 DB 백업과 함께 보관하세요." >&2
-  exit 1
+# 기본 시크릿으로도 배포는 된다(배포판 기본값). 다만 공개된 값이므로 조용히 넘어가지 않는다.
+if grep -qE '^(JWT_SECRET|INTERNAL_TOKEN|DATA_ENCRYPTION_KEY)=odysseus-default-' .env 2>/dev/null; then
+  say "주의: .env 가 아직 공개된 기본 시크릿을 쓰고 있습니다"
+  echo "  실제 응시자 데이터를 받기 전에 바꾸세요 — 각각 \`openssl rand -hex 32\`."
+  echo "  (DATA_ENCRYPTION_KEY 를 바꾸면 그 전에 저장한 AI 공급자 키를 다시 입력해야 합니다.)"
 fi
 
 # ── 0. 지금 무엇이 도는 중인지 알린다 ──────────────────────────

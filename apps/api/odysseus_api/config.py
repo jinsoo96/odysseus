@@ -1,18 +1,42 @@
 from pydantic_settings import BaseSettings
 
 
+# 배포판 기본값 — repo 에 들어 있어 `docker compose up` 이 아무 준비 없이 바로 돈다.
+# 공개된 값이므로 비밀이 아니다. 실제 응시자를 받기 전에 바꾸도록 기동 때마다 크게 알린다.
+DEFAULT_JWT_SECRET = "odysseus-default-jwt-secret-CHANGE-ME-before-production"
+DEFAULT_INTERNAL_TOKEN = "odysseus-default-internal-token-CHANGE-ME-before-production"
+DEFAULT_DATA_ENCRYPTION_KEY = "odysseus-default-data-encryption-key-CHANGE-ME-before-production"
+DEFAULT_REDIS_API_PASSWORD = "odysseus-default-redis-api-password"
+DEFAULT_REDIS_RUNNER_PASSWORD = "odysseus-default-redis-runner-password"
+
+# 위의 기본값과, 과거 예시 파일에 적혔던 자리표시자들. 비밀로 쳐 주지 않는 값의 목록이다.
+KNOWN_PLACEHOLDER_SECRETS = frozenset(
+    {
+        "",
+        "odysseus-dev-secret-change-me",
+        "odysseus-internal-change-me",
+        "change-me-openssl-rand-hex-32",
+        DEFAULT_JWT_SECRET,
+        DEFAULT_INTERNAL_TOKEN,
+        DEFAULT_DATA_ENCRYPTION_KEY,
+        DEFAULT_REDIS_API_PASSWORD,
+        DEFAULT_REDIS_RUNNER_PASSWORD,
+    }
+)
+MIN_SECRET_LEN = 32
+
 class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://odysseus:odysseus@localhost:5432/odysseus"
     redis_url: str = "redis://localhost:6379/0"
 
     # 시크릿에는 기본값이 없다 — 운영 모드에서는 충분히 긴 무작위 값이 없으면 기동을 거부한다
-    jwt_secret: str = ""
+    jwt_secret: str = DEFAULT_JWT_SECRET
     jwt_expire_hours: int = 12
     session_idle_hours: int = 4
-    internal_token: str = ""
+    internal_token: str = DEFAULT_INTERNAL_TOKEN
     # DB에 보관되는 공급자 API 키/AppSetting JSON을 AES-GCM으로 암호화하는 별도 키.
     # 백업 복원에도 같은 값이 필요하며 JWT_SECRET과 분리해 회전 범위를 제한한다.
-    data_encryption_key: str = ""
+    data_encryption_key: str = DEFAULT_DATA_ENCRYPTION_KEY
     internal_api_base: str = "http://127.0.0.1:8000"
 
     # 운영 모드가 기본. development 에서만 데모 시드(고정 비밀번호)가 허용된다.
@@ -64,33 +88,19 @@ def https_only_enabled() -> bool:
     return settings.https_only if settings.https_only is not None else settings.odysseus_env != "development"
 
 
-# 코드·예시 파일에 한 번이라도 적혔던 값 — 어디에서든 시크릿으로 받지 않는다
-KNOWN_PLACEHOLDER_SECRETS = frozenset(
-    {
-        "",
-        "odysseus-dev-secret-change-me",
-        "odysseus-internal-change-me",
-        "change-me-openssl-rand-hex-32",
-    }
-)
-MIN_SECRET_LEN = 32
 
 
 def _secret_problem(name: str, value: str) -> str | None:
     if value in KNOWN_PLACEHOLDER_SECRETS:
-        return f"{name} 이 비어 있거나 알려진 자리표시자 값입니다"
+        return f"{name} 이 공개된 기본값/자리표시자입니다"
     if len(value) < MIN_SECRET_LEN:
         return f"{name} 이 너무 짧습니다 ({len(value)}자, 최소 {MIN_SECRET_LEN}자)"
     return None
 
 
-def check_startup_security() -> None:
-    """기동 전에 알려진 자격증명/암호화 실패 구성을 거부한다.
-
-    운영 모드는 인증용 JWT, 내부 서비스 토큰, DB 저장 암호화 키 셋을 모두 요구한다.
-    개발 모드는 경고만 하며 DATA_ENCRYPTION_KEY가 없으면 기존처럼 평문 DB를 허용한다.
-    """
-    problems = [
+def insecure_secrets() -> list[str]:
+    """공개 기본값이거나 너무 짧아 비밀 구실을 못 하는 시크릿들."""
+    return [
         p
         for p in (
             _secret_problem("JWT_SECRET", settings.jwt_secret),
@@ -99,14 +109,32 @@ def check_startup_security() -> None:
         )
         if p
     ]
-    if problems:
-        hint = "각각 `openssl rand -hex 32` 로 만들어 .env 에 넣으세요."
-        if settings.odysseus_env == "development":
-            import sys
 
-            print(f"[security] WARNING (development): {'; '.join(problems)}. {hint}", file=sys.stderr, flush=True)
-        else:
-            raise RuntimeError(f"{'; '.join(problems)}. {hint}")
+
+def check_startup_security() -> None:
+    """기본 시크릿으로도 기동하되, 그 사실을 숨기지 않는다.
+
+    받자마자 도는 것이 배포판의 기본값이다(기본 시크릿은 repo 에 들어 있다). 다만 그 값들은
+    공개되어 있어 비밀이 아니므로, 남아 있는 한 기동할 때마다 무엇을 바꿔야 하는지 크게 알린다.
+    실제 응시자 데이터를 받기 전에 바꾸는 것은 운영자의 몫이다.
+    """
+    import sys
+
+    problems = insecure_secrets()
+    if problems:
+        lines = [
+            "=" * 78,
+            "[security] 이 서버는 공개된 기본 시크릿으로 돌고 있습니다 — 비밀이 아닙니다.",
+            *(f"  - {p}" for p in problems),
+            "",
+            "  실제 응시자 데이터를 받기 전에 .env 에서 바꾸세요:",
+            "    JWT_SECRET=$(openssl rand -hex 32)            # 바꾸면 기존 로그인 세션이 끊깁니다",
+            "    INTERNAL_TOKEN=$(openssl rand -hex 32)",
+            "    DATA_ENCRYPTION_KEY=$(openssl rand -hex 32)   # 먼저 바꾼 뒤 AI 공급자 키를 다시 입력하세요",
+            "  (DATA_ENCRYPTION_KEY 는 DB 백업과 한 세트입니다 — 정한 뒤에는 함께 보관하세요.)",
+            "=" * 78,
+        ]
+        print("\n".join(lines), file=sys.stderr, flush=True)
     if settings.seed_demo_data and settings.odysseus_env != "development":
         raise RuntimeError(
             "SEED_DEMO_DATA=true 는 ODYSSEUS_ENV=development 에서만 허용됩니다. "

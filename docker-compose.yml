@@ -36,8 +36,8 @@ services:
     #   api    — 모든 키·명령 (큐 적재, 통계 조회, 취소 요청)
     #   runner — 큐 소비와 자기 통계 키만, 명령도 필요한 것만 (LPUSH/KEYS/FLUSH* 불가)
     environment:
-      REDIS_API_PASSWORD: ${REDIS_API_PASSWORD:?REDIS_API_PASSWORD 가 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
-      REDIS_RUNNER_PASSWORD: ${REDIS_RUNNER_PASSWORD:?REDIS_RUNNER_PASSWORD 가 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
+      REDIS_API_PASSWORD: ${REDIS_API_PASSWORD:-odysseus-default-redis-api-password}
+      REDIS_RUNNER_PASSWORD: ${REDIS_RUNNER_PASSWORD:-odysseus-default-redis-runner-password}
     command:
       - sh
       - -c
@@ -64,13 +64,14 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://odysseus:${POSTGRES_PASSWORD:-odysseus}@postgres:5432/odysseus
-      REDIS_URL: redis://api:${REDIS_API_PASSWORD:?}@redis:6379/0
-      # 시크릿에 기본값을 두지 않는다 — 없으면 compose 가 여기서 멈춘다 (openssl rand -hex 32)
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
+      REDIS_URL: redis://api:${REDIS_API_PASSWORD:-odysseus-default-redis-api-password}@redis:6379/0
+      # 기본값이 있어 준비 없이 바로 돈다. 공개된 값이라 비밀이 아니므로 운영 전 .env 에서 바꾼다
+      # (api 가 기동 때마다 크게 알린다). `openssl rand -hex 32`
+      JWT_SECRET: ${JWT_SECRET:-odysseus-default-jwt-secret-CHANGE-ME-before-production}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-odysseus-default-internal-token-CHANGE-ME-before-production}
       # DB 안의 AI 공급자 키·관리자 설정을 AES-GCM 으로 감싸는 키. 운영(production)은 없으면 기동 거부,
       # 개발은 경고만. 백업과 한 세트 — 잃으면 저장된 자격증명을 되살릴 수 없다 (docs/RELIABILITY-HARDENING.md §7).
-      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-odysseus-default-data-encryption-key-CHANGE-ME-before-production}
       # 운영이 기본. 데모 시드(고정 비밀번호)는 ODYSSEUS_ENV=development 에서만 켜진다.
       ODYSSEUS_ENV: ${ODYSSEUS_ENV:-production}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
@@ -97,9 +98,9 @@ services:
     build: ./apps/runner
     restart: unless-stopped
     environment:
-      REDIS_URL: redis://runner:${REDIS_RUNNER_PASSWORD:?}@redis:6379/0
+      REDIS_URL: redis://runner:${REDIS_RUNNER_PASSWORD:-odysseus-default-redis-runner-password}@redis:6379/0
       API_BASE_URL: http://api:8000
-      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN 이 필요합니다}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-odysseus-default-internal-token-CHANGE-ME-before-production}
       RUNNER_CONCURRENCY: ${RUNNER_CONCURRENCY:-2}
       RUNNER_MEM_MB: ${RUNNER_MEM_MB:-4096}
       # replica 를 여러 개 띄우면 반드시 각 replica 에 고유하고 재시작 후에도 동일한 ID 를 준다 (processing 큐 회수용).

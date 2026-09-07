@@ -64,13 +64,16 @@ sudo ./scripts/restore.sh /var/backups/odysseus/ (암호화, root 전용)<file>.
 
 `docker compose down -v` 는 **절대 쓰지 마세요** — `pgdata` 볼륨에 계정·응시 기록·워크스페이스 파일·AI 공급자 키·관리자 설정이 전부 있습니다. `.env` 의 `POSTGRES_PASSWORD` 는 볼륨이 처음 만들어질 때 고정된 값이라 바꾸면 접속이 끊깁니다.
 
+시크릿에는 **배포판 기본값**이 있어 `.env` 없이도 바로 돕니다. 그 값들은 저장소에 공개되어 있으므로
+실제 응시자 데이터를 받기 전에 바꿔야 하고, 남아 있는 동안 api 가 기동할 때마다 크게 알립니다.
+
 | 변수 | 설명 |
 |---|---|
-| `JWT_SECRET` / `INTERNAL_TOKEN` | **필수.** 각각 `openssl rand -hex 32`. 운영 모드에서는 자리표시자·32자 미만이면 기동 거부, 개발 모드는 경고 |
-| `DATA_ENCRYPTION_KEY` | **운영 필수.** `openssl rand -hex 32`. DB 의 AI 공급자 키·관리자 설정을 AES-GCM 으로 감싼다. 백업과 한 세트로 보관 — 잃으면 복구 불가, 바꾸면 기존 값을 못 읽음. 개발 모드는 비워도 됨(평문, 경고) |
+| `JWT_SECRET` / `INTERNAL_TOKEN` | 기본값 있음(저장소 공개 = 비밀 아님). 운영 전 각각 `openssl rand -hex 32` 로 교체. 기본값이 남아 있으면 기동할 때마다 경고 |
+| `DATA_ENCRYPTION_KEY` | 기본값 있음. DB 의 AI 공급자 키·관리자 설정을 AES-GCM 으로 감싼다. 운영 전 교체하고 **DB 백업과 한 세트로 보관** — 바꾸면 그전 값을 못 읽어 관리 콘솔에서 재입력해야 한다(응시 기록·제출물은 대상 아님) |
 | `POSTGRES_PASSWORD` | 기존 볼륨에 묶인 값 — 바꾸지 말 것 |
 | `RUNNER_CONCURRENCY` / `RUNNER_MEM_MB` | 동시 실행 수 / 러너 메모리 상한 (기본 2 / 4096) |
-| `REDIS_API_PASSWORD` / `REDIS_RUNNER_PASSWORD` | **필수.** Redis ACL 계정(api=전체, runner=큐 소비·자기 통계만) |
+| `REDIS_API_PASSWORD` / `REDIS_RUNNER_PASSWORD` | 기본값 있음. Redis ACL 계정(api=전체, runner=큐 소비·자기 통계만). 운영 전 교체 권장 |
 | `ODYSSEUS_ENV` | `production`(기본) 또는 `development` |
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | 빈 DB 최초 기동 시 만들 관리자. 비밀번호를 비우면 무작위 생성 후 api 로그에 한 번 출력 |
 | `SEED_DEMO_DATA` | **개발 전용.** 고정 비밀번호의 데모 계정 3개를 만든다. `ODYSSEUS_ENV=development` 가 아니면 기동 거부 (기본 false) |

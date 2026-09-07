@@ -94,6 +94,25 @@ docker compose up -d --build
 docker compose logs api | grep bootstrap
 ```
 
+설정 파일은 없어도 됩니다 — 시크릿에 기본값이 들어 있어 받자마자 돕니다.
+
+### 운영에 올리기 전에
+
+기본 시크릿은 이 저장소에 공개되어 있어 **비밀이 아닙니다.** 실제 응시자 데이터를 받기 전에 바꾸세요
+(그 전까지 api 가 기동할 때마다 무엇을 바꿔야 하는지 알려 줍니다).
+
+```bash
+cp .env.example .env
+for k in JWT_SECRET INTERNAL_TOKEN DATA_ENCRYPTION_KEY REDIS_API_PASSWORD REDIS_RUNNER_PASSWORD; do
+  sed -i "s|^${k}=.*|${k}=$(openssl rand -hex 32)|" .env
+done
+docker compose up -d --build
+```
+
+`DATA_ENCRYPTION_KEY` 는 DB 안의 AI 공급자 키·관리자 설정을 감싸는 값이라 **DB 백업과 한 세트로 보관**하세요.
+나중에 바꾸면 그전에 저장한 공급자 키를 읽지 못해 관리 콘솔에서 다시 입력해야 합니다
+(응시 기록·제출물은 암호화 대상이 아니라 영향이 없습니다).
+
 여섯 개의 시나리오와 세 개의 시험이 준비되어 있습니다.
 
 만들고 운영하는 사람을 위한 내용은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) 에 있습니다.
