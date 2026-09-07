@@ -63,7 +63,8 @@ services:
       REDIS_URL: redis://api:${REDIS_API_PASSWORD:?}@redis:6379/0
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
-      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?DATA_ENCRYPTION_KEY 가 필요합니다 — DB 비밀값 암호화용으로 `openssl rand -hex 32` 값을 넣으세요}
+      # production에서는 API startup check가 반드시 요구한다. development만 빈 값을 허용한다.
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
       ODYSSEUS_ENV: ${ODYSSEUS_ENV:-production}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
