@@ -1,0 +1,70 @@
+name: Final hardening transforms
+
+on:
+  push:
+    branches:
+      - improve/assessment-reliability-hardening
+    paths:
+      - .github/workflows/final-hardening-transforms.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: improve/assessment-reliability-hardening
+      - name: Apply asserted transforms
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f"{path}: expected {count}, found {actual}: {old[:100]!r}")
+              p.write_text(text.replace(old, new))
+
+          replace(
+              "apps/api/odysseus_api/ai/assessment_eval.py",
+              '    evidence["server_requirement_graph"] = scenario.requirement_graph\n    evidence["server_requirement_metrics"] = requirement_metrics',
+              '    trusted = evidence.setdefault("trusted", {})\n    trusted["requirement_graph"] = scenario.requirement_graph\n    trusted["requirement_metrics"] = requirement_metrics',
+          )
+
+          replace(
+              "apps/api/odysseus_api/requirements_graph.py",
+              '"stakeholder_discovery_pct": None,',
+              '"source_contact_pct": None,',
+          )
+          replace(
+              "apps/api/odysseus_api/requirements_graph.py",
+              '"stakeholder_discovery_pct": pct(discovered, discovery_weight),',
+              '"source_contact_pct": pct(discovered, discovery_weight),',
+          )
+
+          replace(
+              "apps/api/odysseus_api/routers/review.py",
+              '                "rubric": scenario.rubric,\n                "characters": scenario.characters,',
+              '                "rubric": scenario.rubric,\n                "requirement_graph": scenario.requirement_graph,\n                "characters": scenario.characters,',
+          )
+
+          replace(
+              "apps/api/odysseus_api/ai/autoeval.py",
+              '- `trusted.auto_checks` 는 결과 평가의 객관 근거입니다. 자동 체크가 실패한 요구를 충족했다고 평가하지 마세요.\n',
+              '- `trusted.auto_checks` 는 결과 평가의 객관 근거입니다. 자동 체크가 실패한 요구를 충족했다고 평가하지 마세요.\n- `trusted.requirement_graph` / `trusted.requirement_metrics` 는 서버가 구조화한 요구사항·정보 출처·검증 연결입니다. `source_contact_pct`는 해당 정보 보유자에게 접촉했다는 뜻이지 요구사항을 이해했다는 확정 판정이 아니므로, 실제 대화 내용과 함께 판단하세요.\n',
+          )
+          PY
+      - name: Compile Python
+        run: python -m compileall -q apps/api/odysseus_api apps/runner
+      - name: Commit transforms
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/api/odysseus_api/ai/assessment_eval.py apps/api/odysseus_api/requirements_graph.py apps/api/odysseus_api/routers/review.py apps/api/odysseus_api/ai/autoeval.py
+          git commit -m "feat(eval): expose trusted requirement graph metrics"
+          git push origin HEAD:improve/assessment-reliability-hardening
