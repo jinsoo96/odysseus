@@ -1,26 +1,22 @@
 """요청 속도·동시성·비용 상한 (ODY-010).
 
-프로세스 안 토큰 버킷이다 — api 는 단일 인스턴스로 돈다. 여러 인스턴스로 늘리면 Redis 로
-옮겨야 한다 (키 규약은 그대로 쓰면 된다).
-
-세 종류를 제공한다:
-  * `limiter(scope, per_min, burst)` — FastAPI 의존성. 키는 로그인 사용자 id, 없으면 클라이언트 IP.
-    넘으면 429 + Retry-After.
-  * `login_guard` — 로그인 전용. IP 별 속도 + (이메일별) 실패 누적 잠금(지수 backoff).
-  * `check(key, per_min, burst)` — 라우터 안에서 직접 쓰는 원시 함수 (응시별 키 등).
-
-클라이언트 IP 는 엣지(nginx)가 붙인 X-Forwarded-For, 그 앞의 Cloudflare 가 붙인 CF-Connecting-IP
-순으로 본다 — api 는 엣지와 루프백에서만 접근되므로 이 헤더를 믿어도 된다.
+Token buckets and login-failure backoff live in Redis so multiple API replicas enforce one shared
+budget. A small process-local implementation remains only as a degradation fallback when Redis is
+briefly unavailable; the API does not silently lose all rate limiting during an outage.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, Request
+import redis
+from fastapi import HTTPException, Request
+
+from .config import settings
 
 log = logging.getLogger("odysseus.ratelimit")
 
@@ -34,6 +30,58 @@ class _Bucket:
 _buckets: dict[str, _Bucket] = {}
 _lock = threading.Lock()
 _MAX_KEYS = 50_000
+_sync_redis: redis.Redis | None = None
+# Redis 가 죽어 있는 동안 모든 요청이 연결 타임아웃(0.25s)을 이벤트 루프에서 물지 않도록,
+# 실패 뒤 잠깐은 바로 로컬 폴백으로 간다.
+_redis_down_until = 0.0
+_REDIS_RETRY_S = 5.0
+
+
+def _redis_usable() -> bool:
+    return time.monotonic() >= _redis_down_until
+
+
+def _redis_failed() -> None:
+    global _redis_down_until
+    _redis_down_until = time.monotonic() + _REDIS_RETRY_S
+
+_BUCKET_LUA = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
+local capacity = tonumber(ARGV[1])
+local rate = tonumber(ARGV[2])
+local vals = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(vals[1]) or capacity
+local ts = tonumber(vals[2]) or now
+if now > ts then tokens = math.min(capacity, tokens + (now - ts) * rate) end
+local allowed = 0
+local wait = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+else
+  wait = (1 - tokens) / rate
+end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+local ttl = math.max(60, math.ceil((capacity / rate) * 2))
+redis.call('EXPIRE', KEYS[1], ttl)
+return {allowed, tostring(wait)}
+"""
+
+
+def _redis() -> redis.Redis:
+    global _sync_redis
+    if _sync_redis is None:
+        _sync_redis = redis.Redis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=0.25, socket_timeout=0.5
+        )
+    return _sync_redis
+
+
+def _digest_key(prefix: str, value: str) -> str:
+    # Redis operators should not see candidate emails/IPs or other raw subjects in key names.
+    digest = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+    return f"odysseus:{prefix}:{digest}"
 
 
 def _prune(now: float) -> None:
@@ -44,8 +92,7 @@ def _prune(now: float) -> None:
         _buckets.pop(k, None)
 
 
-def check(key: str, per_min: float, burst: int) -> float:
-    """허용이면 0, 아니면 다시 시도할 때까지의 초."""
+def _local_check(key: str, per_min: float, burst: int) -> float:
     now = time.monotonic()
     rate = per_min / 60.0
     with _lock:
@@ -60,6 +107,29 @@ def check(key: str, per_min: float, burst: int) -> float:
             b.tokens -= 1.0
             return 0.0
         return max(1.0, (1.0 - b.tokens) / rate)
+
+
+def check(key: str, per_min: float, burst: int) -> float:
+    """허용이면 0, 아니면 다시 시도할 때까지의 초. 모든 API replica가 같은 Redis bucket을 본다."""
+    if per_min <= 0 or burst <= 0:
+        return 60.0
+    if not _redis_usable():
+        return _local_check(key, per_min, burst)
+    try:
+        result = _redis().eval(
+            _BUCKET_LUA,
+            1,
+            _digest_key("ratelimit", key),
+            max(1, int(burst)),
+            float(per_min) / 60.0,
+        )
+        allowed = int(result[0])
+        wait = float(result[1])
+        return 0.0 if allowed else max(1.0, wait)
+    except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
+        log.warning("Redis rate limiter unavailable; using process-local fallback")
+        return _local_check(key, per_min, burst)
 
 
 def client_ip(request: Request) -> str:
@@ -84,19 +154,14 @@ def too_many(retry_after: float, what: str = "요청") -> HTTPException:
 def enforce(key: str, per_min: float, burst: int, what: str = "요청") -> None:
     wait = check(key, per_min, burst)
     if wait:
-        log.info("rate limited key=%s scope=%s retry=%.0fs", key[:80], what, wait)
+        log.info("rate limited key_hash=%s scope=%s retry=%.0fs", hashlib.sha256(key.encode()).hexdigest()[:12], what, wait)
         raise too_many(wait, what)
 
 
 def limiter(scope: str, per_min: float, burst: int, what: str = "요청"):
-    """엔드포인트 의존성 — 로그인 사용자별(없으면 IP 별) 버킷."""
-
     async def dep(request: Request) -> None:
-        from .deps import get_current_user  # 순환 import 방지
-
         subject = None
         try:
-            # 쿠키/헤더에 토큰이 있으면 사용자 id 로, 아니면 IP 로 — DB 를 거치지 않는다
             from .security import COOKIE_NAME, decode_token
 
             token = request.cookies.get(COOKIE_NAME)
@@ -115,7 +180,7 @@ def limiter(scope: str, per_min: float, burst: int, what: str = "요청"):
 
 # ── 로그인: IP 속도 + 이메일별 실패 잠금 ─────────────────────────
 
-_failures: dict[str, tuple[int, float]] = {}  # email → (연속 실패 수, 마지막 실패 시각)
+_failures: dict[str, tuple[int, float]] = {}
 LOGIN_FREE_FAILURES = 5
 LOCK_BASE_S = 30.0
 LOCK_MAX_S = 15 * 60.0
@@ -123,14 +188,12 @@ FAIL_WINDOW_S = 15 * 60.0
 
 
 def _lock_seconds(failures: int) -> float:
-    """실패 5회까지는 잠그지 않는다. 6회째부터 30초, 그 뒤 실패마다 2배 (최대 15분)."""
     if failures <= LOGIN_FREE_FAILURES:
         return 0.0
     return min(LOCK_MAX_S, LOCK_BASE_S * (2 ** (failures - LOGIN_FREE_FAILURES - 1)))
 
 
-def login_locked(email: str) -> float:
-    """이 이메일이 잠겨 있으면 남은 초, 아니면 0."""
+def _local_login_locked(email: str) -> float:
     now = time.monotonic()
     with _lock:
         rec = _failures.get(email)
@@ -140,31 +203,65 @@ def login_locked(email: str) -> float:
         if now - last > FAIL_WINDOW_S:
             _failures.pop(email, None)
             return 0.0
-        remaining = _lock_seconds(n) - (now - last)
-        return max(0.0, remaining)
+        return max(0.0, _lock_seconds(n) - (now - last))
+
+
+def login_locked(email: str) -> float:
+    email = email.strip().lower()
+    key = _digest_key("loginfail", email)
+    if not _redis_usable():
+        return _local_login_locked(email)
+    try:
+        values = _redis().hmget(key, "count", "last")
+        if not values or not values[0] or not values[1]:
+            return 0.0
+        n, last = int(values[0]), float(values[1])
+        age = max(0.0, time.time() - last)
+        return max(0.0, _lock_seconds(n) - age)
+    except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
+        return _local_login_locked(email)
 
 
 def login_failed(email: str, ip: str) -> float:
-    """실패를 누적하고, 잠금이 시작됐으면 그 길이를 돌려준다."""
-    now = time.monotonic()
-    with _lock:
-        n, last = _failures.get(email, (0, now))
-        n = n + 1 if now - last <= FAIL_WINDOW_S else 1
-        _failures[email] = (n, now)
-        if len(_failures) > _MAX_KEYS:
-            for k in [k for k, (_, t) in _failures.items() if now - t > FAIL_WINDOW_S]:
-                _failures.pop(k, None)
-    lock = _lock_seconds(n)
-    log.warning("login failed email=%s ip=%s consecutive=%d lock=%.0fs", email, ip, n, lock)
-    return lock
+    now_epoch = time.time()
+    email = email.strip().lower()
+    key = _digest_key("loginfail", email)
+    try:
+        if not _redis_usable():
+            raise redis.RedisError("circuit open")
+        pipe = _redis().pipeline(transaction=True)
+        pipe.hincrby(key, "count", 1)
+        pipe.hset(key, "last", now_epoch)
+        pipe.expire(key, int(FAIL_WINDOW_S))
+        result = pipe.execute()
+        n = int(result[0])
+        lock_s = _lock_seconds(n)
+    except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
+        now = time.monotonic()
+        with _lock:
+            n, last = _failures.get(email, (0, now))
+            n = n + 1 if now - last <= FAIL_WINDOW_S else 1
+            _failures[email] = (n, now)
+        lock_s = _lock_seconds(n)
+    log.warning("login failed email_hash=%s ip_hash=%s consecutive=%d lock=%.0fs", hashlib.sha256(email.encode()).hexdigest()[:12], hashlib.sha256(ip.encode()).hexdigest()[:12], n, lock_s)
+    return lock_s
 
 
 def login_succeeded(email: str) -> None:
+    email = email.strip().lower()
+    try:
+        if _redis_usable():
+            _redis().delete(_digest_key("loginfail", email))
+    except (redis.RedisError, OSError):
+        _redis_failed()
     with _lock:
         _failures.pop(email, None)
 
 
 def reset_for_tests() -> None:
+    """Reset process fallback state. Redis test fixtures should use an isolated database/prefix."""
     with _lock:
         _buckets.clear()
         _failures.clear()

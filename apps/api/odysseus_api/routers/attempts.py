@@ -1,27 +1,32 @@
-"""응시 생명주기 — 시작(워크스페이스 물질화 + 오프닝 메시지), 상태, 행동 이벤트, 종료, 재응시."""
+"""응시 생명주기 — 시작(정의 고정 + 워크스페이스 물질화 + 오프닝 메시지), 상태, 행동 이벤트, 종료, 재응시."""
 
 import hashlib
 import uuid
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..db import get_db
+from ..definitions import (
+    FrozenScenario,
+    bind_definition,
+    build_assessment_definition,
+    definition_for_attempt,
+    scenario_from_definition,
+)
 from ..deps import get_current_user, is_staff
 from ..guests import GUEST_ROLE
 from ..models import (
     Assessment,
-    AssessmentScenario,
     Assignment,
     Attempt,
     Event,
     MessengerMessage,
-    Scenario,
     User,
     WorkspaceFile,
     utcnow,
@@ -54,10 +59,12 @@ ALLOWED_EVENT_TYPES = {
     "net_online",
     "exam_leave",
 }
-# 참고자료 검색·열람은 서버가 직접 기록한다 (reference.py) — 브라우저가 보고한 값을 받으면 위조가 된다.
 
-# 브라우저 보고 이벤트의 payload 는 이 키만, 이 크기까지만 남긴다 (ODY-017)
-CLIENT_PAYLOAD_KEYS = {"away_ms", "chars", "text", "app", "path", "page", "reason", "seq", "client_id"}
+# 브라우저 보고 이벤트의 payload 는 이 키만, 이 크기까지만 남긴다 (ODY-017).
+# 클립보드 원문은 평가에 필요하지 않으므로 받더라도 저장하지 않는다 — chars/source 같은 메타만 쓴다.
+# 참고자료 검색·열람은 서버가 직접 기록한다 (reference.py) — 브라우저가 보고한 값을 받으면 위조가 된다.
+# 브라우저 보고 이벤트의 payload 는 이 키만, 이 크기까지만 남긴다 (ODY-017). 클립보드 원문(text)은 받지 않는다.
+CLIENT_PAYLOAD_KEYS = {"away_ms", "chars", "app", "path", "page", "reason", "seq", "client_id", "source"}
 CLIENT_TEXT_MAX = 500
 CLIENT_SEQ_KEY = "odysseus:attempt:{aid}:client_seq"
 
@@ -103,25 +110,17 @@ async def require_own_active(attempt_id: uuid.UUID, user: User, db: AsyncSession
     return attempt
 
 
-async def _scenario_link(attempt: Attempt, scenario_id: uuid.UUID, db: AsyncSession) -> AssessmentScenario:
-    link = (
-        await db.execute(
-            select(AssessmentScenario).where(
-                AssessmentScenario.assessment_id == attempt.assessment_id,
-                AssessmentScenario.scenario_id == scenario_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if not link:
+async def _scenario_link(attempt: Attempt, scenario_id: uuid.UUID, db: AsyncSession) -> FrozenScenario:
+    """응시 시작 때 고정한 정의에서 시나리오를 찾는다 — live assessment relation을 읽지 않는다."""
+    definition = await definition_for_attempt(db, attempt)
+    scenario = scenario_from_definition(definition, scenario_id)
+    if not scenario:
         raise HTTPException(404, "이 시험에 포함되지 않은 시나리오입니다")
-    return link
+    return scenario
 
 
 def _is_taker(attempt: Attempt, user: User | None) -> bool:
-    """지금 이 응시를 '치르는 중'인 본인인가 — 잠금 규칙은 이 경우에만 적용한다.
-
-    (스태프가 남의 응시를 리뷰할 때는 전 구간을 볼 수 있어야 한다.)
-    """
+    """지금 이 응시를 '치르는 중'인 본인인가 — 잠금 규칙은 이 경우에만 적용한다."""
     return bool(user) and attempt.user_id == user.id and attempt.status == "in_progress"
 
 
@@ -132,32 +131,23 @@ async def scenario_in_attempt(
     user: User | None = None,
     *,
     mutate: bool = False,
-) -> Scenario:
-    """시나리오 접근 가드.
+) -> FrozenScenario:
+    """응시 정의 안의 immutable 시나리오 접근 가드.
 
     다중 시나리오 시험은 **순차 진행**이다. 응시 중인 본인에게는
       · 아직 순서가 오지 않은 시나리오 → 잠김(423)
       · 이미 제출한 시나리오 → 읽기만 허용(쓰기는 423)
     """
-    link = await _scenario_link(attempt, scenario_id, db)
-    scenario = await db.get(Scenario, scenario_id)
-    if not scenario:
-        raise HTTPException(404, "시나리오를 찾을 수 없습니다")
-
+    scenario = await _scenario_link(attempt, scenario_id, db)
     if _is_taker(attempt, user):
-        if link.ordinal > attempt.current_ordinal:
+        if scenario.ordinal > attempt.current_ordinal:
             raise HTTPException(423, "아직 잠긴 문제입니다. 앞선 문제를 먼저 제출하세요")
-        if mutate and link.ordinal < attempt.current_ordinal:
+        if mutate and scenario.ordinal < attempt.current_ordinal:
             raise HTTPException(423, "이미 제출한 문제입니다. 되돌아갈 수 없습니다")
     return scenario
 
 
 def _scenario_status(attempt: Attempt, ordinal: int) -> str:
-    """completed | in_progress | locked.
-
-    시험이 끝난 뒤에는 진행 중이던 문제도 제출된 것으로 본다 (마지막 문제가
-    영원히 '진행 중'으로 남지 않도록).
-    """
     if ordinal < attempt.current_ordinal:
         return "completed"
     if ordinal > attempt.current_ordinal:
@@ -168,49 +158,42 @@ def _scenario_status(attempt: Attempt, ordinal: int) -> str:
 async def _attempt_out(attempt: Attempt, db: AsyncSession) -> AttemptOut:
     from .settings import get_ui_settings
 
-    assessment = await db.get(Assessment, attempt.assessment_id)
+    definition = await definition_for_attempt(db, attempt)
     ui = await get_ui_settings(db)
-    links = (
-        await db.execute(
-            select(AssessmentScenario)
-            .where(AssessmentScenario.assessment_id == attempt.assessment_id)
-            .options(selectinload(AssessmentScenario.scenario))
-            .order_by(AssessmentScenario.ordinal)
+    scenarios: list[AttemptScenarioOut] = []
+    for spec in sorted(definition.get("scenarios") or [], key=lambda x: int(x.get("ordinal", 0) or 0)):
+        scenario = scenario_from_definition(definition, spec.get("scenario_id"))
+        if not scenario:
+            continue
+        scenarios.append(
+            AttemptScenarioOut(
+                scenario_id=scenario.id,
+                title=scenario.title,
+                briefing_md=scenario.briefing_md if scenario.ordinal <= attempt.current_ordinal else "",
+                ordinal=scenario.ordinal,
+                points=scenario.points,
+                status=_scenario_status(attempt, scenario.ordinal),
+                agent_enabled=scenario.agent_enabled,
+                characters=[
+                    {
+                        "key": c.get("key"),
+                        "name": c.get("name"),
+                        "role": c.get("role", ""),
+                        "color": c.get("color", "#6366f1"),
+                    }
+                    for c in (scenario.characters or [])
+                ],
+            )
         )
-    ).scalars().all()
-    scenarios = [
-        AttemptScenarioOut(
-            scenario_id=link.scenario_id,
-            title=link.scenario.title,
-            # 잠긴 문제의 브리핑은 미리 보여주지 않는다 (스포일러 방지)
-            briefing_md=(
-                link.scenario.briefing_md if link.ordinal <= attempt.current_ordinal else ""
-            ),
-            ordinal=link.ordinal,
-            points=link.points,
-            status=_scenario_status(attempt, link.ordinal),
-            agent_enabled=link.scenario.agent_enabled,
-            characters=[
-                {
-                    "key": c.get("key"),
-                    "name": c.get("name"),
-                    "role": c.get("role", ""),
-                    "color": c.get("color", "#6366f1"),
-                }
-                for c in (link.scenario.characters or [])
-            ],
-        )
-        for link in links
-    ]
     return AttemptOut(
         id=attempt.id,
         assessment_id=attempt.assessment_id,
-        assessment_title=assessment.title,
+        assessment_title=str(definition.get("title") or ""),
         status=attempt.status,
         started_at=attempt.started_at,
         deadline_at=attempt.deadline_at,
         submitted_at=attempt.submitted_at,
-        agent_max_turns=assessment.agent_max_turns,
+        agent_max_turns=int(definition.get("agent_max_turns", 0) or 0),
         current_ordinal=attempt.current_ordinal,
         gamified_intro=bool(ui.get("gamified_intro")),
         scenarios=scenarios,
@@ -266,9 +249,7 @@ async def my_assignments(user: User = Depends(get_current_user), db: AsyncSessio
             starts_at=a.starts_at,
             ends_at=a.ends_at,
             attempt_id=(attempt_by_assessment.get(a.id).id if attempt_by_assessment.get(a.id) else None),
-            attempt_status=(
-                attempt_by_assessment.get(a.id).status if attempt_by_assessment.get(a.id) else None
-            ),
+            attempt_status=(attempt_by_assessment.get(a.id).status if attempt_by_assessment.get(a.id) else None),
             assigned=a.id in assigned_ids,
         )
         for a in assessments
@@ -276,17 +257,12 @@ async def my_assignments(user: User = Depends(get_current_user), db: AsyncSessio
 
 
 async def _materialize(attempt: Attempt, db: AsyncSession) -> None:
-    """시작 시점: 시나리오별 초기 파일 + 오프닝 메신저 메시지 생성."""
-    links = (
-        await db.execute(
-            select(AssessmentScenario)
-            .where(AssessmentScenario.assessment_id == attempt.assessment_id)
-            .options(selectinload(AssessmentScenario.scenario))
-            .order_by(AssessmentScenario.ordinal)
-        )
-    ).scalars().all()
-    for link in links:
-        scenario = link.scenario
+    """시작 시점에 고정된 정의에서 초기 파일 + 오프닝 메시지를 정확히 한 번 생성한다."""
+    definition = await definition_for_attempt(db, attempt, persist_legacy=False)
+    for spec in definition.get("scenarios") or []:
+        scenario = scenario_from_definition(definition, spec.get("scenario_id"))
+        if not scenario:
+            continue
         for f in scenario.initial_files or []:
             db.add(
                 WorkspaceFile(
@@ -310,7 +286,6 @@ async def _materialize(attempt: Attempt, db: AsyncSession) -> None:
 
 
 async def _lock_attempt_slot(db: AsyncSession, assessment_id: uuid.UUID, user_id: uuid.UUID) -> None:
-    """(시험, 사용자) 슬롯에 트랜잭션 범위 advisory lock — 커밋/롤백과 함께 풀린다."""
     key = int.from_bytes(hashlib.sha256(f"{assessment_id}:{user_id}".encode()).digest()[:8], "big", signed=True)
     await db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": key})
 
@@ -359,10 +334,14 @@ async def start_attempt(
             raise HTTPException(400, "이미 종료된 시험입니다")
         return await _attempt_out(existing, db)
 
-    deadline = now + timedelta(minutes=assessment.duration_min)
+    # 여기서 정의 전체를 고정한다. 이후 authoring row가 바뀌어도 이 응시는 이 JSON만 읽는다.
+    definition = await build_assessment_definition(db, assessment)
+    duration_min = int(definition.get("duration_min", assessment.duration_min) or assessment.duration_min)
+    deadline = now + timedelta(minutes=duration_min)
     if assessment.ends_at and deadline > assessment.ends_at:
         deadline = assessment.ends_at
     attempt = Attempt(assessment_id=assessment_id, user_id=user.id, started_at=now, deadline_at=deadline)
+    bind_definition(attempt, definition)
     db.add(attempt)
     try:
         await db.flush()
@@ -371,12 +350,15 @@ async def start_attempt(
             Event(
                 attempt_id=attempt.id,
                 type="attempt_started",
-                payload={"assessment_id": str(assessment_id), "deadline_at": deadline.isoformat()},
+                payload={
+                    "assessment_id": str(assessment_id),
+                    "deadline_at": deadline.isoformat(),
+                    "definition_hash": definition.get("definition_hash"),
+                },
             )
         )
         await db.commit()
     except IntegrityError:
-        # 잠금을 우회한 경로(다른 인스턴스 등)에서 먼저 만들어졌다 — 그 응시를 그대로 돌려준다
         await db.rollback()
         existing = await _active_attempt(db, assessment_id, user.id)
         if not existing:
@@ -400,12 +382,7 @@ async def post_events(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """브라우저가 보고하는 행동 이벤트 — **신뢰할 수 없는 보조 신호**로만 저장한다 (ODY-017).
-
-    · source=client_untrusted 로 표시되어 서버 관측 이벤트(파일·실행·대화·참고자료·제출)와 구분된다
-    · 종류는 화이트리스트, 시나리오는 이 시험에 속한 것만, payload 는 허용 키·크기만 남긴다
-    · 클라이언트가 보내는 seq 로 중복은 버리고 빈틈은 서버 이벤트(telemetry_gap)로 남긴다
-    """
+    """브라우저가 보고하는 행동 이벤트 — 신뢰할 수 없는 보조 신호로만 저장한다 (ODY-017)."""
     attempt = await get_attempt_for(attempt_id, user, db)
     if attempt.user_id != user.id:
         raise HTTPException(403, "본인의 응시에만 기록할 수 있습니다")
@@ -414,13 +391,11 @@ async def post_events(
         ended = attempt.submitted_at or attempt.deadline_at
         if not ended or utcnow() > ended + EVENT_FLUSH_GRACE:
             return {"ok": True, "recorded": 0}
+    definition = await definition_for_attempt(db, attempt)
     valid_scenarios = {
-        sid
-        for (sid,) in (
-            await db.execute(
-                select(AssessmentScenario.scenario_id).where(AssessmentScenario.assessment_id == attempt.assessment_id)
-            )
-        ).all()
+        uuid.UUID(str(s.get("scenario_id")))
+        for s in definition.get("scenarios") or []
+        if s.get("scenario_id")
     }
     # 순서 번호 — Redis 에 마지막 값을 둔다 (없으면 순서 검사를 건너뛴다)
     last_seq: int | None = None
@@ -447,7 +422,7 @@ async def post_events(
         if isinstance(seq, (int, float)) and last_seq is not None:
             seq = int(seq)
             if seq <= last_seq:
-                dropped += 1  # 재전송·재생
+                dropped += 1
                 continue
             if last_seq and seq > last_seq + 1:
                 db.add(
@@ -486,36 +461,26 @@ async def complete_scenario(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """현재 문제를 제출하고 다음 문제로 넘어간다 (되돌아갈 수 없다).
-
-    마지막 문제였다면 시험 자체가 종료된다.
-    """
     attempt = await require_own_active(attempt_id, user, db)
-    link = await _scenario_link(attempt, scenario_id, db)
-    if link.ordinal != attempt.current_ordinal:
+    scenario = await _scenario_link(attempt, scenario_id, db)
+    if scenario.ordinal != attempt.current_ordinal:
         raise HTTPException(409, "현재 진행 중인 문제가 아닙니다")
-
-    total = (
-        await db.execute(
-            select(func.count(AssessmentScenario.id)).where(
-                AssessmentScenario.assessment_id == attempt.assessment_id
-            )
-        )
-    ).scalar() or 0
+    definition = await definition_for_attempt(db, attempt)
+    total = len(definition.get("scenarios") or [])
 
     db.add(
         Event(
             attempt_id=attempt.id,
             scenario_id=scenario_id,
             type="scenario_completed",
-            payload={"ordinal": link.ordinal, "total": total},
+            payload={"ordinal": scenario.ordinal, "total": total},
         )
     )
-    if link.ordinal + 1 >= total:
-        await db.commit()  # scenario_completed 이벤트를 먼저 남기고, 종료는 잠금 아래에서
+    if scenario.ordinal + 1 >= total:
+        await db.commit()
         attempt = await finalize_attempt(db, attempt.id, "submitted") or attempt
     else:
-        attempt.current_ordinal = link.ordinal + 1
+        attempt.current_ordinal = scenario.ordinal + 1
         await db.commit()
     return await _attempt_out(attempt, db)
 
@@ -536,7 +501,7 @@ async def finish_attempt(
 async def retake_attempt(
     attempt_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    """재응시 — 이전 기록을 superseded로 보존한 채 새 시도를 시작 (스태프는 본인/타인, 응시자는 불가)."""
+    """재응시 — 이전 기록을 보존하고 현재 authoring definition으로 새 시도를 시작한다."""
     attempt = await db.get(Attempt, attempt_id)
     if not attempt:
         raise HTTPException(404, "응시 정보를 찾을 수 없습니다")
@@ -567,16 +532,26 @@ async def retake_attempt(
     await db.flush()
 
     assessment = await db.get(Assessment, attempt.assessment_id)
+    if not assessment:
+        raise HTTPException(404, "시험을 찾을 수 없습니다")
+    definition = await build_assessment_definition(db, assessment)
     now = utcnow()
-    deadline = now + timedelta(minutes=assessment.duration_min)
+    deadline = now + timedelta(minutes=int(definition.get("duration_min", assessment.duration_min)))
+    if assessment.ends_at and deadline > assessment.ends_at:
+        deadline = assessment.ends_at
     new_attempt = Attempt(
         assessment_id=attempt.assessment_id, user_id=attempt.user_id, started_at=now, deadline_at=deadline
     )
+    bind_definition(new_attempt, definition)
     db.add(new_attempt)
     await db.flush()
     await _materialize(new_attempt, db)
     db.add(
-        Event(attempt_id=new_attempt.id, type="attempt_started", payload={"retake_of": str(attempt.id)})
+        Event(
+            attempt_id=new_attempt.id,
+            type="attempt_started",
+            payload={"retake_of": str(attempt.id), "definition_hash": definition.get("definition_hash")},
+        )
     )
     await db.commit()
     return await _attempt_out(new_attempt, db)

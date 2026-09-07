@@ -185,7 +185,7 @@ def _absolute(base: str, raw: str | None) -> str | None:
     return absolute if absolute.startswith(("http://", "https://")) else None
 
 
-def _rewrite_srcset(base: str, srcset: str, asset_base: str, secret: str) -> str | None:
+def _rewrite_srcset(base: str, srcset: str, asset_base: str, secret: str, scope: str = "") -> str | None:
     out = []
     for part in srcset.split(","):
         bits = part.strip().split()
@@ -300,7 +300,7 @@ def render_page(
                     del el.attrib[name]
                 continue
             if lname in ("srcset", "data-srcset") and tag in ("img", "source"):
-                rewritten = _rewrite_srcset(base, value, asset_base, secret)
+                rewritten = _rewrite_srcset(base, value, asset_base, secret, scope)
                 del el.attrib[name]
                 if rewritten:
                     el.set("srcset", rewritten)

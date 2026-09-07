@@ -76,6 +76,14 @@ def _proc_stat(pid: str) -> tuple[int, int] | None:
 
 
 def _proc_rss(pid: str) -> int:
+    # 프로세스 트리를 합산하므로 공유 페이지(libc·JVM·node)가 프로세스 수만큼 중복되지 않도록 Pss 를 우선 쓴다.
+    try:
+        with open(f"/proc/{pid}/smaps_rollup") as fh:
+            for line in fh:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
     try:
         with open(f"/proc/{pid}/statm") as fh:
             return int(fh.read().split()[1]) * PAGE_SIZE

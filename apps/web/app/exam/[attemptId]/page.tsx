@@ -158,7 +158,7 @@ function useActivityTracker(attemptId: string, active: boolean, scenarioId: stri
     const recordCopy = (type: "copy" | "cut", text: string) => {
       const trimmed = (text ?? "").trim();
       if (!trimmed) return;
-      push(type, { chars: trimmed.length, text: trimmed.slice(0, 500) });
+      push(type, { chars: trimmed.length });
     };
     const onCopy = () => recordCopy("copy", window.getSelection()?.toString() ?? "");
     const onCut = () => recordCopy("cut", window.getSelection()?.toString() ?? "");

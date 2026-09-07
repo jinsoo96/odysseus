@@ -6,9 +6,8 @@
   1. 응시 행을 잠근다 (SELECT … FOR UPDATE) — 늦게 도착하는 러너 콜백과 경쟁하지 않는다.
   2. 상태를 바꾼다 (submitted | expired).
   3. 남아 있는 실행(queued/running)을 취소한다 — 러너에 취소를 알리고 기록은 error 로 닫는다.
-  4. 시나리오별 워크스페이스 **스냅샷 요약**(파일 수·바이트·내용 해시, 대화·실행 수)을 응시에 남긴다.
-     워크스페이스 자체는 DB 트리거(main.MIGRATIONS)가 제출 뒤 변경을 막으므로, 이 해시는
-     평가 시점에 "그대로인가" 를 검증하는 데 쓴다.
+  4. 시나리오별 워크스페이스 스냅샷 요약을 응시에 남긴다.
+     응시 시작 때 고정한 `_definition` / `_definition_hash` 는 절대 덮어쓰지 않는다.
   5. 이벤트를 남기고 커밋한다.
 """
 
@@ -22,15 +21,16 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import AssessmentScenario, Attempt, Event, Execution, MessengerMessage, WorkspaceFile, utcnow
+from .definitions import DEFINITION_HASH_KEY, DEFINITION_KEY, definition_for_attempt
+from .models import Attempt, Event, Execution, MessengerMessage, WorkspaceFile, utcnow
 
 log = logging.getLogger("odysseus.lifecycle")
 
 CANCEL_KEY = "odysseus:runner:cancel"
+CANCEL_TTL_S = 6 * 3600
 
 
 async def workspace_digest(db: AsyncSession, attempt_id: uuid.UUID, scenario_id: uuid.UUID) -> dict:
-    """시나리오 워크스페이스의 내용 해시 — 경로순으로 (path, sha256(content)) 를 이어 붙여 sha256."""
     rows = (
         await db.execute(
             select(WorkspaceFile.path, WorkspaceFile.content)
@@ -51,15 +51,18 @@ async def workspace_digest(db: AsyncSession, attempt_id: uuid.UUID, scenario_id:
 
 
 async def _snapshot(db: AsyncSession, attempt: Attempt) -> dict:
-    links = (
-        await db.execute(
-            select(AssessmentScenario.scenario_id, AssessmentScenario.ordinal)
-            .where(AssessmentScenario.assessment_id == attempt.assessment_id)
-            .order_by(AssessmentScenario.ordinal)
-        )
-    ).all()
-    snap: dict[str, dict] = {}
-    for scenario_id, ordinal in links:
+    definition = await definition_for_attempt(db, attempt, persist_legacy=False)
+    previous = dict(attempt.snapshot or {})
+    snap: dict[str, object] = {
+        DEFINITION_KEY: previous.get(DEFINITION_KEY, definition),
+        DEFINITION_HASH_KEY: previous.get(DEFINITION_HASH_KEY, definition.get("definition_hash")),
+    }
+    for spec in definition.get("scenarios") or []:
+        try:
+            scenario_id = uuid.UUID(str(spec.get("scenario_id")))
+        except (TypeError, ValueError):
+            continue
+        ordinal = int(spec.get("ordinal", 0) or 0)
         entry = await workspace_digest(db, attempt.id, scenario_id)
         entry["ordinal"] = ordinal
         entry["messages"] = (
@@ -81,7 +84,7 @@ async def _snapshot(db: AsyncSession, attempt: Attempt) -> dict:
 
 
 async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason: str) -> int:
-    """queued/running 실행을 닫고 러너에 취소를 알린다. 이후 도착하는 콜백은 internal.py 가 감사용으로만 받는다."""
+    """Close queued/running work and leave durable-enough cancellation tombstones for the runner."""
     rows = (
         await db.execute(
             select(Execution).where(Execution.attempt_id == attempt_id, Execution.status.in_(("queued", "running")))
@@ -95,7 +98,8 @@ async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason
         r = get_redis()
         for e in rows:
             await r.sadd(CANCEL_KEY, str(e.id))
-        await r.expire(CANCEL_KEY, 300)
+        # Queue backlogs can exceed five minutes. Keep tombstones for the full attempt telemetry window.
+        await r.expire(CANCEL_KEY, CANCEL_TTL_S)
     except Exception:  # noqa: BLE001 — 취소 통지 실패가 종료를 막아선 안 된다
         log.warning("cancel notify failed attempt=%s", attempt_id)
     now = utcnow()
@@ -103,6 +107,9 @@ async def cancel_open_executions(db: AsyncSession, attempt_id: uuid.UUID, reason
         e.status = "error"
         e.stderr = ((e.stderr or "") + f"\n[{reason}]").strip()
         e.finished_at = now
+        # Even if a stale worker later executes the old queue payload, its callback can no longer mutate state.
+        e.callback_token = None
+        e.input_files = None
     return len(rows)
 
 
@@ -114,7 +121,6 @@ async def finalize_attempt(
     actor: str = "candidate",
     submitted_at: datetime | None = None,
 ) -> Attempt | None:
-    """응시를 끝낸다. 이미 끝났으면 그대로 돌려준다. 행 잠금 아래에서 상태·취소·스냅샷·이벤트를 한 번에."""
     assert status in ("submitted", "expired")
     attempt = (
         await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
@@ -129,8 +135,12 @@ async def finalize_attempt(
     cancelled = await cancel_open_executions(
         db, attempt.id, "제출로 취소됨" if status == "submitted" else "마감으로 취소됨"
     )
-    # 스냅샷은 취소 뒤에 잰다 — 취소된 실행의 결과는 반영되지 않으므로 이 값이 최종이다
     attempt.snapshot = await _snapshot(db, attempt)
+    public_snapshot = {
+        sid: {"digest": v["digest"], "files": v["files"]}
+        for sid, v in attempt.snapshot.items()
+        if not sid.startswith("_") and isinstance(v, dict) and "digest" in v
+    }
     db.add(
         Event(
             attempt_id=attempt.id,
@@ -138,7 +148,8 @@ async def finalize_attempt(
             payload={
                 "actor": actor,
                 "cancelled_executions": cancelled,
-                "snapshot": {sid: {"digest": v["digest"], "files": v["files"]} for sid, v in attempt.snapshot.items()},
+                "definition_hash": attempt.snapshot.get(DEFINITION_HASH_KEY),
+                "snapshot": public_snapshot,
             },
         )
     )

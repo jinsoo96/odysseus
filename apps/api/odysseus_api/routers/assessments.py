@@ -1,4 +1,9 @@
-"""시험(assessment) CRUD — 시나리오 N개 + 응시자 배정."""
+"""시험(assessment) CRUD — 시나리오 N개 + 응시자 배정.
+
+Assessment/Scenario 행은 최신 authoring state다. 실제 응시는 시작 시 definition snapshot을
+고정하므로, 이미 사용된 시험도 다음 응시를 위해 수정할 수 있다. 단, Attempt의 FK와 감사
+기록을 보존하기 위해 응시가 존재하는 Assessment 자체의 삭제는 금지한다.
+"""
 
 import uuid
 
@@ -45,6 +50,17 @@ async def _load(assessment_id: uuid.UUID, db: AsyncSession) -> Assessment:
     return row
 
 
+async def _attempt_count(assessment_id: uuid.UUID, db: AsyncSession) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count(Attempt.id)).where(Attempt.assessment_id == assessment_id)
+            )
+        ).scalar()
+        or 0
+    )
+
+
 def _to_out(a: Assessment) -> AssessmentOut:
     return AssessmentOut(
         id=a.id,
@@ -81,12 +97,16 @@ async def _validate_providers(body: AssessmentIn, db: AsyncSession) -> None:
 
 
 async def _apply_relations(row: Assessment, body: AssessmentIn, db: AsyncSession) -> None:
+    # 보관된 시나리오는 새로 연결할 수 없지만, 이미 이 시험에 들어 있는 것은 유지한다 —
+    # 그렇지 않으면 시나리오 하나가 보관되는 순간 배정 변경 같은 편집이 전부 400 이 된다.
+    already = {link.scenario_id for link in row.scenarios}
     for link in body.scenarios:
-        if not await db.get(Scenario, link.scenario_id):
-            raise HTTPException(400, f"존재하지 않는 시나리오: {link.scenario_id}")
+        scenario = await db.get(Scenario, link.scenario_id)
+        if not scenario or (scenario.is_archived and link.scenario_id not in already):
+            raise HTTPException(400, f"존재하지 않거나 보관된 시나리오: {link.scenario_id}")
     row.scenarios.clear()
     row.assignments.clear()
-    await db.flush()  # clear 후 재추가 시 유니크 위반 방지
+    await db.flush()
     for i, link in enumerate(body.scenarios):
         row.scenarios.append(
             AssessmentScenario(scenario_id=link.scenario_id, ordinal=i, points=link.points)
@@ -185,6 +205,12 @@ async def delete_assessment(assessment_id: uuid.UUID, db: AsyncSession = Depends
     row = await db.get(Assessment, assessment_id)
     if not row:
         raise HTTPException(404, "시험을 찾을 수 없습니다")
+    attempts = await _attempt_count(assessment_id, db)
+    if attempts:
+        raise HTTPException(
+            409,
+            f"응시 기록 {attempts}건이 있어 시험을 삭제할 수 없습니다. 기록 보존을 위해 시험은 유지하세요",
+        )
     await db.delete(row)
     await db.commit()
     return {"ok": True}

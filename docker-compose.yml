@@ -45,7 +45,9 @@ services:
         set -eu
         printf 'user default off\n' > /tmp/users.acl
         printf 'user api on >%s ~* &* +@all\n' "$$REDIS_API_PASSWORD" >> /tmp/users.acl
-        printf 'user runner on >%s ~odysseus:run:queue ~odysseus:runner:* ~odysseus:attempt:* -@all +brpop +llen +set +hincrby +hincrbyfloat +expire +smembers +srem +ping +multi +exec +client|setinfo\n' "$$REDIS_RUNNER_PASSWORD" >> /tmp/users.acl
+        # runner 는 pending/processing 큐와 자기 통계·취소·전달횟수 키만 쓴다. FLUSH/KEYS 같은 광역 명령은 없다.
+        # (LPUSH 는 콜백 실패 시 되돌려 넣기용 — 작업은 HMAC 서명이라 위조 적재는 api 가 버린다)
+        printf 'user runner on >%s ~odysseus:run:* ~odysseus:runner:* ~odysseus:attempt:* -@all +brpop +brpoplpush +rpoplpush +lrem +lpush +incr +llen +set +hincrby +hincrbyfloat +expire +smembers +sismember +srem +ping +multi +exec +client|setinfo\n' "$$REDIS_RUNNER_PASSWORD" >> /tmp/users.acl
         chmod 600 /tmp/users.acl
         exec redis-server --aclfile /tmp/users.acl --save "" --appendonly no
     healthcheck:
@@ -66,6 +68,9 @@ services:
       # 시크릿에 기본값을 두지 않는다 — 없으면 compose 가 여기서 멈춘다 (openssl rand -hex 32)
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN 이 필요합니다 — .env 에 `openssl rand -hex 32` 값을 넣으세요}
+      # DB 안의 AI 공급자 키·관리자 설정을 AES-GCM 으로 감싸는 키. 운영(production)은 없으면 기동 거부,
+      # 개발은 경고만. 백업과 한 세트 — 잃으면 저장된 자격증명을 되살릴 수 없다 (docs/RELIABILITY-HARDENING.md §7).
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
       # 운영이 기본. 데모 시드(고정 비밀번호)는 ODYSSEUS_ENV=development 에서만 켜진다.
       ODYSSEUS_ENV: ${ODYSSEUS_ENV:-production}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
@@ -97,9 +102,17 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN 이 필요합니다}
       RUNNER_CONCURRENCY: ${RUNNER_CONCURRENCY:-2}
       RUNNER_MEM_MB: ${RUNNER_MEM_MB:-4096}
-    # 메모리는 여기서 묶는다 — 실행별 RLIMIT_AS 는 Go/JVM 을 시작조차 못 하게 한다
+      # replica 를 여러 개 띄우면 반드시 각 replica 에 고유하고 재시작 후에도 동일한 ID 를 준다 (processing 큐 회수용).
+      RUNNER_ID: ${RUNNER_ID:-runner-main}
+      # 실행 하나의 실제 프로세스 트리 메모리(Pss) 상한. 비우면 컨테이너 메모리의 80%/동시성으로 자동 계산.
+      RUNNER_EXEC_MEM_MB: ${RUNNER_EXEC_MEM_MB:-}
+      # 운영에서는 네임스페이스 격리가 안 되는 호스트에서 비격리로 돌지 않고 기동을 거부한다.
+      RUNNER_REQUIRE_ISOLATION: ${RUNNER_REQUIRE_ISOLATION:-true}
+    # 메모리는 여기서 묶는다 — 실행별 RLIMIT_AS 는 Go/JVM 을 시작조차 못 하게 한다 (실행별 상한은 Pss 감시자)
     mem_limit: ${RUNNER_MEM_MB:-4096}m
     pids_limit: 1024
+    # gVisor(runsc) 가 설치된 호스트에서는 RUNNER_RUNTIME=runsc 로 OCI 격리층을 한 겹 더 둘 수 있다 (기본 runc).
+    runtime: ${RUNNER_RUNTIME:-runc}
     # 실행 한 건을 자기 PID/mount/IPC 네임스페이스에 가둔다 — `ps` 에 남의 프로세스가
     # 보이지 않고 /tmp 도 실행 전용 tmpfs 가 된다. 네임스페이스 생성과 mount 에
     # SYS_ADMIN 이 필요하고, 기본 AppArmor 프로필이 mount 전파 변경을 막으므로 푼다.
