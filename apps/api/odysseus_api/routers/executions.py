@@ -70,6 +70,8 @@ async def run_command(
             payload={"command": command[:200], "actor": "ide"},
         )
     )
+    # PostgreSQL is the durable source of truth. Redis delivery happens after this commit and is
+    # idempotent; queue_recovery repairs the crash/outage window by replaying rows still `queued`.
     await db.commit()
     await db.refresh(execution)
 
@@ -85,20 +87,18 @@ async def run_command(
             source=execution.source,
             callback_token=execution.callback_token or "",
         )
-    except Exception as exc:  # Redis 장애를 queued 영구 고착으로 바꾸지 않는다.
-        execution.status = "error"
-        execution.stderr = "실행 큐에 작업을 등록하지 못했습니다. 잠시 뒤 다시 시도하세요"
-        execution.callback_token = None
+    except Exception as exc:
+        # Do not turn a transient Redis outage into a permanently failed execution. The committed
+        # row stays queued and the reconciler will enqueue it when Redis returns.
         db.add(
             Event(
                 attempt_id=attempt_id,
                 scenario_id=scenario_id,
-                type="run_enqueue_failed",
+                type="run_enqueue_delayed",
                 payload={"execution_id": str(execution.id), "error_type": type(exc).__name__},
             )
         )
         await db.commit()
-        raise HTTPException(503, "실행 큐가 일시적으로 사용할 수 없습니다. 잠시 뒤 다시 시도하세요") from exc
     return execution
 
 
