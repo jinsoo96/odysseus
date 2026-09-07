@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import workspace as ws
@@ -116,7 +117,11 @@ async def run_command(
 async def get_execution(
     execution_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
-    execution = await db.get(Execution, execution_id, populate_existing=True)
+    execution = (
+        await db.execute(
+            select(Execution).options(defer(Execution.input_files)).where(Execution.id == execution_id)
+        )
+    ).scalar_one_or_none()
     if not execution:
         raise HTTPException(404, "실행을 찾을 수 없습니다")
     await get_attempt_for(execution.attempt_id, user, db)
@@ -138,6 +143,7 @@ async def list_executions(
     return (
         await db.execute(
             select(Execution)
+            .options(defer(Execution.input_files))
             .where(Execution.attempt_id == attempt_id, Execution.scenario_id == scenario_id)
             .order_by(Execution.created_at)
         )

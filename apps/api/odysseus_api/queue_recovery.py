@@ -13,7 +13,6 @@ import logging
 from datetime import timedelta
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import undefer
 
 from . import workspace as ws
 from .config import settings
@@ -37,7 +36,6 @@ async def reconcile_once() -> int:
         rows = (
             await db.execute(
                 select(Execution)
-                .options(undefer(Execution.input_files))
                 .where(Execution.status == "queued", Execution.callback_token.is_not(None))
                 .order_by(Execution.created_at)
                 .limit(BATCH_SIZE)
