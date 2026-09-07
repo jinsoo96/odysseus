@@ -7,10 +7,20 @@ SET NX EX로 소유권을 둔다. 해제는 토큰을 비교한 뒤 DEL하는 Lu
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import secrets
+import time
 from dataclasses import dataclass
 
+from redis.exceptions import RedisError
+
 from .runqueue import get_redis
+
+log = logging.getLogger("odysseus.locks")
+# Redis 가 잠시 없을 때의 프로세스 로컬 폴백 — 단일 인스턴스에서는 main 의 asyncio.Lock 과 같은 보장이다.
+# 여러 인스턴스라면 폴백 동안 인스턴스 간 배타는 잃지만, 500 으로 대화를 끊는 것보다 낫다.
+_local_held: dict[str, float] = {}
 
 _PREFIX = "odysseus:lease:"
 _RELEASE_SCRIPT = """
@@ -25,10 +35,19 @@ return 0
 class RedisLease:
     key: str
     token: str
+    local: bool = False
 
     async def release(self) -> None:
+        if self.local:
+            if _local_held.get(self.key) is not None:
+                _local_held.pop(self.key, None)
+            return
         try:
-            await get_redis().eval(_RELEASE_SCRIPT, 1, self.key, self.token)
+            # 요청 태스크가 취소(클라이언트 이탈)돼도 Redis 쪽 DEL 은 끝까지 간다 — 그렇지 않으면
+            # 새로고침 한 번에 이 응시의 다음 턴이 TTL 동안 409 로 막힌다.
+            await asyncio.shield(get_redis().eval(_RELEASE_SCRIPT, 1, self.key, self.token))
+        except asyncio.CancelledError:
+            pass
         except Exception:
             # 해제 실패가 사용자 응답을 깨면 안 된다. TTL이 최종 안전장치다.
             pass
@@ -42,5 +61,15 @@ async def acquire_lease(name: str, *, ttl_s: int = 900) -> RedisLease | None:
     """
     token = secrets.token_urlsafe(24)
     key = _PREFIX + name
-    ok = await get_redis().set(key, token, nx=True, ex=max(5, int(ttl_s)))
+    ttl = max(5, int(ttl_s))
+    try:
+        ok = await get_redis().set(key, token, nx=True, ex=ttl)
+    except (RedisError, OSError):
+        log.warning("Redis lease unavailable; process-local fallback name=%s", name)
+        now = time.monotonic()
+        held_until = _local_held.get(key)
+        if held_until is not None and held_until > now:
+            return None
+        _local_held[key] = now + ttl
+        return RedisLease(key=key, token=token, local=True)
     return RedisLease(key=key, token=token) if ok else None

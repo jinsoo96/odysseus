@@ -74,8 +74,9 @@ async def send_message(
     enforce(f"messenger:{attempt_id}", per_min=12, burst=6, what="메시지 전송")
     await guest_chat_gate(db, user, attempt_id, what="메시지 전송")
 
+    # NPC 한 응답은 공급자 타임아웃(300s)까지 걸릴 수 있다 — 그보다 짧은 TTL 은 같은 방에 두 번째 전송을 들여보낸다.
     lease = await acquire_lease(
-        f"messenger-turn:{attempt_id}:{scenario_id}:{character_key}", ttl_s=3 * 60
+        f"messenger-turn:{attempt_id}:{scenario_id}:{character_key}", ttl_s=7 * 60
     )
     if lease is None:
         raise HTTPException(409, "이 대화방의 이전 메시지를 처리 중입니다. 답변이 온 뒤 다시 보내세요")

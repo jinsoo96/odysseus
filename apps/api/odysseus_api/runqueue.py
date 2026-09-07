@@ -29,7 +29,11 @@ return 0
 def get_redis() -> aioredis.Redis:
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        # 타임아웃이 없으면 Redis 가 멈춘(응답 없는) 동안 대화·실행 요청이 통째로 매달린다.
+        # api 쪽은 블로킹 명령(BRPOP 류)을 쓰지 않으므로 짧게 잡아도 된다 — 넘기면 각 호출자의 폴백/경고가 받는다.
+        _redis = aioredis.from_url(
+            settings.redis_url, decode_responses=True, socket_connect_timeout=2, socket_timeout=5
+        )
     return _redis
 
 
@@ -81,6 +85,7 @@ async def enqueue_run(
         "attempt_id": attempt_id,
         "scenario_id": scenario_id,
         "source": source,
+        # 러너는 이 값을 X-Execution-Token 으로 되돌려 준다 — 없거나 다르면 결과가 접수되지 않는다
         "callback_token": callback_token,
     }
     job["sig"] = sign_job(job)

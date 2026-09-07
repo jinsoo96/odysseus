@@ -106,7 +106,8 @@ async def send_agent_message(
     if res is None or not res.configured:
         raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
 
-    turn_lease = await acquire_lease(f"agent-turn:{attempt_id}", ttl_s=15 * 60)
+    # 한 턴은 도구 반복 × 공급자 타임아웃(300s)까지 갈 수 있다. TTL 은 finally 가 못 도는 비정상 종료의 안전장치일 뿐이다.
+    turn_lease = await acquire_lease(f"agent-turn:{attempt_id}", ttl_s=30 * 60)
     if turn_lease is None:
         raise HTTPException(409, "이미 진행 중인 에이전트 요청이 있습니다. 끝난 뒤 다시 보내세요")
 
@@ -197,7 +198,9 @@ async def send_agent_message(
         finally:
             if not persisted:
                 asyncio.get_running_loop().create_task(persist(parts, steps, error or "AI_BACKEND_ERROR", correlation_id))
-            await turn_lease.release()
+            # 클라이언트가 중간에 끊으면 이 제너레이터는 취소 스코프 안에서 닫힌다 — 여기서 await 하면
+            # CancelledError 로 해제가 건너뛰어져 다음 턴이 TTL 동안 409 가 된다. persist 와 같은 방식으로 분리한다.
+            asyncio.get_running_loop().create_task(turn_lease.release())
 
     return StreamingResponse(
         event_stream(),

@@ -31,6 +31,19 @@ _buckets: dict[str, _Bucket] = {}
 _lock = threading.Lock()
 _MAX_KEYS = 50_000
 _sync_redis: redis.Redis | None = None
+# Redis 가 죽어 있는 동안 모든 요청이 연결 타임아웃(0.25s)을 이벤트 루프에서 물지 않도록,
+# 실패 뒤 잠깐은 바로 로컬 폴백으로 간다.
+_redis_down_until = 0.0
+_REDIS_RETRY_S = 5.0
+
+
+def _redis_usable() -> bool:
+    return time.monotonic() >= _redis_down_until
+
+
+def _redis_failed() -> None:
+    global _redis_down_until
+    _redis_down_until = time.monotonic() + _REDIS_RETRY_S
 
 _BUCKET_LUA = """
 local t = redis.call('TIME')
@@ -100,6 +113,8 @@ def check(key: str, per_min: float, burst: int) -> float:
     """허용이면 0, 아니면 다시 시도할 때까지의 초. 모든 API replica가 같은 Redis bucket을 본다."""
     if per_min <= 0 or burst <= 0:
         return 60.0
+    if not _redis_usable():
+        return _local_check(key, per_min, burst)
     try:
         result = _redis().eval(
             _BUCKET_LUA,
@@ -112,6 +127,7 @@ def check(key: str, per_min: float, burst: int) -> float:
         wait = float(result[1])
         return 0.0 if allowed else max(1.0, wait)
     except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
         log.warning("Redis rate limiter unavailable; using process-local fallback")
         return _local_check(key, per_min, burst)
 
@@ -191,7 +207,10 @@ def _local_login_locked(email: str) -> float:
 
 
 def login_locked(email: str) -> float:
-    key = _digest_key("loginfail", email.strip().lower())
+    email = email.strip().lower()
+    key = _digest_key("loginfail", email)
+    if not _redis_usable():
+        return _local_login_locked(email)
     try:
         values = _redis().hmget(key, "count", "last")
         if not values or not values[0] or not values[1]:
@@ -200,13 +219,17 @@ def login_locked(email: str) -> float:
         age = max(0.0, time.time() - last)
         return max(0.0, _lock_seconds(n) - age)
     except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
         return _local_login_locked(email)
 
 
 def login_failed(email: str, ip: str) -> float:
     now_epoch = time.time()
-    key = _digest_key("loginfail", email.strip().lower())
+    email = email.strip().lower()
+    key = _digest_key("loginfail", email)
     try:
+        if not _redis_usable():
+            raise redis.RedisError("circuit open")
         pipe = _redis().pipeline(transaction=True)
         pipe.hincrby(key, "count", 1)
         pipe.hset(key, "last", now_epoch)
@@ -215,6 +238,7 @@ def login_failed(email: str, ip: str) -> float:
         n = int(result[0])
         lock_s = _lock_seconds(n)
     except (redis.RedisError, OSError, ValueError, TypeError):
+        _redis_failed()
         now = time.monotonic()
         with _lock:
             n, last = _failures.get(email, (0, now))
@@ -226,10 +250,12 @@ def login_failed(email: str, ip: str) -> float:
 
 
 def login_succeeded(email: str) -> None:
+    email = email.strip().lower()
     try:
-        _redis().delete(_digest_key("loginfail", email.strip().lower()))
+        if _redis_usable():
+            _redis().delete(_digest_key("loginfail", email))
     except (redis.RedisError, OSError):
-        pass
+        _redis_failed()
     with _lock:
         _failures.pop(email, None)
 
