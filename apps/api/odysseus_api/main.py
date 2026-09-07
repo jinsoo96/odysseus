@@ -3,10 +3,10 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
 from .config import check_startup_security, https_only_enabled, settings
 from .db import Base, SessionLocal, engine
+from .migrations import run_schema_migrations
 from .queue_recovery import recovery_loop
 from .secrets import install_encrypted_types, migrate_encrypted_storage
 from .routers import (
@@ -30,44 +30,6 @@ from .seed import bootstrap_if_empty, seed_demo_if_empty
 
 install_encrypted_types()
 
-MIGRATIONS: list[str] = [
-    "ALTER TABLE attempts ADD COLUMN IF NOT EXISTS current_ordinal INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE executions ADD COLUMN IF NOT EXISTS callback_token VARCHAR(64)",
-    "ALTER TABLE attempts ADD COLUMN IF NOT EXISTS snapshot JSONB",
-    "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS npc_base_prompt TEXT NOT NULL DEFAULT ''",
-    """
-    CREATE OR REPLACE FUNCTION workspace_files_frozen_guard() RETURNS trigger AS $$
-    DECLARE st TEXT;
-    BEGIN
-        SELECT status INTO st FROM attempts WHERE id = COALESCE(NEW.attempt_id, OLD.attempt_id);
-        IF st IS NOT NULL AND st <> 'in_progress' THEN
-            RAISE EXCEPTION 'workspace is frozen: attempt % is %', COALESCE(NEW.attempt_id, OLD.attempt_id), st
-                USING ERRCODE = 'check_violation';
-        END IF;
-        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
-        RETURN NEW;
-    END $$ LANGUAGE plpgsql
-    """,
-    "ALTER TABLE events ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'server'",
-    """
-    UPDATE attempts a SET superseded = true
-    WHERE a.superseded = false AND EXISTS (
-        SELECT 1 FROM attempts b
-        WHERE b.assessment_id = a.assessment_id AND b.user_id = a.user_id AND b.superseded = false
-          AND (b.started_at > a.started_at OR (b.started_at = a.started_at AND b.id > a.id))
-    )
-    """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS attempts_one_active_per_user ON attempts (assessment_id, user_id) WHERE superseded = false",
-    "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_ip VARCHAR(64)",
-    "DROP TRIGGER IF EXISTS workspace_files_frozen ON workspace_files",
-    """
-    CREATE TRIGGER workspace_files_frozen BEFORE INSERT OR UPDATE OR DELETE ON workspace_files
-        FOR EACH ROW EXECUTE FUNCTION workspace_files_frozen_guard()
-    """,
-]
-
-SCHEMA_MIGRATION_LOCK = 5_472_943_197_011
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,11 +37,11 @@ async def lifespan(app: FastAPI):
     for i in range(30):
         try:
             async with engine.begin() as conn:
-                # Multiple API replicas may boot together; serialize DDL/bootstrap changes.
-                await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": SCHEMA_MIGRATION_LOCK})
+                # Fresh installations still get the current baseline from metadata. Existing installs
+                # then advance through the durable, versioned migration ledger. The migration runner
+                # owns the cross-replica advisory lock.
                 await conn.run_sync(Base.metadata.create_all)
-                for stmt in MIGRATIONS:
-                    await conn.execute(text(stmt))
+                await run_schema_migrations(conn)
             break
         except Exception:
             if i == 29:
