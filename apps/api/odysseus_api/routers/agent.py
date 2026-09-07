@@ -14,10 +14,11 @@ from ..ai import provider as ai_provider
 from ..ai.errors import describe_error, public_meta
 from ..config import settings
 from ..db import SessionLocal, get_db
+from ..definitions import definition_for_attempt, provider_id
 from ..deps import get_current_user
 from ..guests import guest_chat_gate
 from ..locks import acquire_lease
-from ..models import AgentMessage, Assessment, Attempt, Event, User
+from ..models import AgentMessage, Attempt, Event, User
 from ..ratelimit import enforce
 from ..schemas import AgentMessageOut, AgentSendIn, AgentUsageOut
 from .attempts import get_attempt_for, require_own_active, scenario_in_attempt
@@ -40,14 +41,17 @@ async def agent_usage(
     attempt_id: uuid.UUID, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     attempt = await get_attempt_for(attempt_id, user, db)
-    assessment = await db.get(Assessment, attempt.assessment_id)
+    definition = await definition_for_attempt(db, attempt)
+    max_turns = int(definition.get("agent_max_turns", 0) or 0)
     used = await _used_turns(db, attempt_id)
-    res = await ai_provider.resolve_ai(db, "chat", override_provider_id=assessment.agent_provider_id)
+    res = await ai_provider.resolve_ai(
+        db, "chat", override_provider_id=provider_id(definition, "agent_provider_id")
+    )
     return AgentUsageOut(
-        enabled=assessment.agent_max_turns > 0,
+        enabled=max_turns > 0,
         used=used,
-        max=assessment.agent_max_turns,
-        remaining=max(0, assessment.agent_max_turns - used),
+        max=max_turns,
+        remaining=max(0, max_turns - used),
         configured=bool(res and res.configured),
         model=res.model if res else None,
         tools_available=bool(res and ai_provider.agent_tools_available(res)),
@@ -92,21 +96,21 @@ async def send_agent_message(
     scenario = await scenario_in_attempt(attempt, scenario_id, db, user, mutate=True)
     if not scenario.agent_enabled:
         raise HTTPException(403, "이 시나리오에서는 AI 에이전트를 사용할 수 없습니다")
-    enforce(f"agent:{attempt_id}", per_min=12, burst=6, what="에이전트 요청")  # ODY-010
+    enforce(f"agent:{attempt_id}", per_min=12, burst=6, what="에이전트 요청")
     await guest_chat_gate(db, user, attempt_id, what="에이전트 요청")
 
-    assessment = await db.get(Assessment, attempt.assessment_id)
-    if assessment.agent_max_turns <= 0:
+    definition = await definition_for_attempt(db, attempt)
+    max_turns = int(definition.get("agent_max_turns", 0) or 0)
+    if max_turns <= 0:
         raise HTTPException(403, "이 시험에서는 AI 에이전트를 사용할 수 없습니다")
 
-    res = await ai_provider.resolve_ai(db, "chat", override_provider_id=assessment.agent_provider_id)
+    res = await ai_provider.resolve_ai(
+        db, "chat", override_provider_id=provider_id(definition, "agent_provider_id")
+    )
     if res is None or not res.configured:
         raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
 
-    max_turns = int(assessment.agent_max_turns)
-
-    # ODY-019+: 응시 1건에 에이전트 턴은 한 번에 하나. 프로세스-local asyncio.Lock은
-    # API replica가 둘 이상이면 무력해지므로 Redis lease를 소유권으로 쓴다.
+    # 응시 1건에 에이전트 턴은 한 번에 하나. Redis lease라 API replica가 여러 개여도 동일하다.
     turn_lease = await acquire_lease(f"agent-turn:{attempt_id}", ttl_s=15 * 60)
     if turn_lease is None:
         raise HTTPException(409, "이미 진행 중인 에이전트 요청이 있습니다. 끝난 뒤 다시 보내세요")
