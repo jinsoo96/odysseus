@@ -19,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .models import AiProvider, Assessment, AssessmentScenario, Attempt, Scenario
+from .requirements_graph import build_requirement_graph
 
 DEFINITION_KEY = "_definition"
 DEFINITION_HASH_KEY = "_definition_hash"
-DEFINITION_VERSION = 2
+DEFINITION_VERSION = 3
 
 
 def _json_copy(value: Any) -> Any:
@@ -35,6 +36,9 @@ def canonical_hash(value: dict) -> str:
 
 
 def scenario_to_spec(scenario: Scenario, *, ordinal: int, points: int) -> dict:
+    characters = _json_copy(scenario.characters or [])
+    checks = _json_copy(scenario.checks or [])
+    rubric = _json_copy(scenario.rubric or {})
     return {
         "scenario_id": str(scenario.id),
         "ordinal": int(ordinal),
@@ -43,13 +47,19 @@ def scenario_to_spec(scenario: Scenario, *, ordinal: int, points: int) -> dict:
         "summary": scenario.summary,
         "difficulty": scenario.difficulty,
         "briefing_md": scenario.briefing_md,
-        "characters": _json_copy(scenario.characters or []),
+        "characters": characters,
         "opening_messages": _json_copy(scenario.opening_messages or []),
         "initial_files": _json_copy(scenario.initial_files or []),
         "objectives_md": scenario.objectives_md,
         "npc_base_prompt": scenario.npc_base_prompt,
-        "checks": _json_copy(scenario.checks or []),
-        "rubric": _json_copy(scenario.rubric or {}),
+        "checks": checks,
+        "rubric": rubric,
+        "requirement_graph": build_requirement_graph(
+            objectives_md=scenario.objectives_md,
+            characters=characters,
+            checks=checks,
+            rubric=rubric,
+        ),
         "agent_enabled": bool(scenario.agent_enabled),
     }
 
@@ -144,6 +154,7 @@ class FrozenScenario:
     npc_base_prompt: str
     checks: list
     rubric: dict
+    requirement_graph: dict
     agent_enabled: bool
     ordinal: int
     points: int
@@ -154,19 +165,33 @@ def scenario_from_definition(definition: dict, scenario_id: uuid.UUID | str) -> 
     for spec in definition.get("scenarios") or []:
         if str(spec.get("scenario_id")) != sid:
             continue
+        characters = copy.deepcopy(spec.get("characters") or [])
+        checks = copy.deepcopy(spec.get("checks") or [])
+        rubric = copy.deepcopy(spec.get("rubric") or {})
+        requirement_graph = copy.deepcopy(spec.get("requirement_graph") or {})
+        # v1/v2 snapshots remain evaluable. Derive the graph deterministically from their frozen data,
+        # never from the current editable Scenario row.
+        if not requirement_graph:
+            requirement_graph = build_requirement_graph(
+                objectives_md=str(spec.get("objectives_md") or ""),
+                characters=characters,
+                checks=checks,
+                rubric=rubric,
+            )
         return FrozenScenario(
             id=uuid.UUID(sid),
             title=str(spec.get("title") or ""),
             summary=str(spec.get("summary") or ""),
             difficulty=str(spec.get("difficulty") or "medium"),
             briefing_md=str(spec.get("briefing_md") or ""),
-            characters=copy.deepcopy(spec.get("characters") or []),
+            characters=characters,
             opening_messages=copy.deepcopy(spec.get("opening_messages") or []),
             initial_files=copy.deepcopy(spec.get("initial_files") or []),
             objectives_md=str(spec.get("objectives_md") or ""),
             npc_base_prompt=str(spec.get("npc_base_prompt") or ""),
-            checks=copy.deepcopy(spec.get("checks") or []),
-            rubric=copy.deepcopy(spec.get("rubric") or {}),
+            checks=checks,
+            rubric=rubric,
+            requirement_graph=requirement_graph,
             agent_enabled=bool(spec.get("agent_enabled", True)),
             ordinal=int(spec.get("ordinal", 0) or 0),
             points=int(spec.get("points", 0) or 0),
@@ -201,7 +226,7 @@ async def resolve_attempt_ai(db: AsyncSession, definition: dict, role: str):
         return None
     profile = (definition.get("provider_profiles") or {}).get(role)
     if not isinstance(profile, dict):
-        return resolved  # version-1/legacy snapshot
+        return resolved
     return replace(
         resolved,
         provider=str(profile.get("provider") or resolved.provider),
