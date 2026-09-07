@@ -14,7 +14,7 @@ from ..ai import provider as ai_provider
 from ..ai.errors import describe_error, public_meta
 from ..config import settings
 from ..db import SessionLocal, get_db
-from ..definitions import definition_for_attempt, provider_id
+from ..definitions import definition_for_attempt, resolve_attempt_ai
 from ..deps import get_current_user
 from ..guests import guest_chat_gate
 from ..locks import acquire_lease
@@ -44,9 +44,7 @@ async def agent_usage(
     definition = await definition_for_attempt(db, attempt)
     max_turns = int(definition.get("agent_max_turns", 0) or 0)
     used = await _used_turns(db, attempt_id)
-    res = await ai_provider.resolve_ai(
-        db, "chat", override_provider_id=provider_id(definition, "agent_provider_id")
-    )
+    res = await resolve_attempt_ai(db, definition, "agent")
     return AgentUsageOut(
         enabled=max_turns > 0,
         used=used,
@@ -104,20 +102,16 @@ async def send_agent_message(
     if max_turns <= 0:
         raise HTTPException(403, "이 시험에서는 AI 에이전트를 사용할 수 없습니다")
 
-    res = await ai_provider.resolve_ai(
-        db, "chat", override_provider_id=provider_id(definition, "agent_provider_id")
-    )
+    res = await resolve_attempt_ai(db, definition, "agent")
     if res is None or not res.configured:
         raise HTTPException(503, "AI가 설정되지 않았습니다. 관리자에게 문의하세요 (관리자 콘솔 > 설정)")
 
-    # 응시 1건에 에이전트 턴은 한 번에 하나. Redis lease라 API replica가 여러 개여도 동일하다.
     turn_lease = await acquire_lease(f"agent-turn:{attempt_id}", ttl_s=15 * 60)
     if turn_lease is None:
         raise HTTPException(409, "이미 진행 중인 에이전트 요청이 있습니다. 끝난 뒤 다시 보내세요")
 
     reserved = False
     try:
-        # 한도 예약을 원자적으로: 응시 행을 잠근 채 COUNT → 사용자 메시지 INSERT → COMMIT.
         await db.execute(select(Attempt).where(Attempt.id == attempt_id).with_for_update())
         used = await _used_turns(db, attempt_id)
         if used >= max_turns:
