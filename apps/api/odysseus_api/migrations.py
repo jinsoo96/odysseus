@@ -85,6 +85,13 @@ MIGRATIONS: tuple[Migration, ...] = (
             "CREATE UNIQUE INDEX IF NOT EXISTS attempts_one_active_per_user ON attempts (assessment_id, user_id) WHERE superseded = false",
         ),
     ),
+    Migration(
+        5,
+        "durable execution input snapshots",
+        (
+            "ALTER TABLE executions ADD COLUMN IF NOT EXISTS input_files JSONB",
+        ),
+    ),
 )
 
 
