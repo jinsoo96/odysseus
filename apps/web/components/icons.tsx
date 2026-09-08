@@ -54,4 +54,12 @@ export {
   FiChevronLeft as IconChevronLeft,
   FiGitPullRequest as IconFork,
   FiLoader as IconLoader,
+  FiBookOpen as IconDocs,
+  FiGrid as IconSheet,
+  FiMail as IconMail,
+  FiCornerUpLeft as IconReply,
+  FiInbox as IconInbox,
+  FiCalendar as IconCalendar,
+  FiUsers as IconUsers,
+  FiAlertCircle as IconInfo,
 } from "react-icons/fi";
