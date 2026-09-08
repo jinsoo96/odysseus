@@ -19,11 +19,21 @@ interface WorkspaceCtxValue {
   createFolder: (path: string) => Promise<void>;
   /** 폴더 앱 → IDE로 파일 열기 요청 (데스크톱이 IDE 창을 띄우고 전달) */
   requestOpenInIde: (path: string) => void;
+  /** 폴더/뷰어 → 문서 편집기로 열기 요청 */
+  requestOpenInDocs: (path: string) => void;
+  /** 폴더/뷰어 → 표 편집기로 열기 요청 */
+  requestOpenInSheet: (path: string) => void;
   /** 더블클릭 → 읽기 전용 뷰어 앱으로 열기 */
   openInViewer: (path: string) => void;
   /** IDE가 소비할 대기 중 열기 요청 */
   pendingIdeOpen: string | null;
   consumeIdeOpen: () => void;
+  /** 문서 편집기가 소비할 대기 중 열기 요청 */
+  pendingDocsOpen: string | null;
+  consumeDocsOpen: () => void;
+  /** 표 편집기가 소비할 대기 중 열기 요청 */
+  pendingSheetOpen: string | null;
+  consumeSheetOpen: () => void;
 }
 
 const Ctx = createContext<WorkspaceCtxValue | null>(null);
@@ -38,18 +48,24 @@ export function WorkspaceProvider({
   attemptId,
   scenarioId,
   onOpenIde,
+  onOpenDocs,
+  onOpenSheet,
   onOpenViewer,
   children,
 }: {
   attemptId: string;
   scenarioId: string;
   onOpenIde: () => void;
+  onOpenDocs?: () => void;
+  onOpenSheet?: () => void;
   onOpenViewer?: (path: string) => void;
   children: React.ReactNode;
 }) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingIdeOpen, setPendingIdeOpen] = useState<string | null>(null);
+  const [pendingDocsOpen, setPendingDocsOpen] = useState<string | null>(null);
+  const [pendingSheetOpen, setPendingSheetOpen] = useState<string | null>(null);
 
   const base = `/attempts/${attemptId}/scenarios/${scenarioId}`;
 
@@ -120,6 +136,26 @@ export function WorkspaceProvider({
 
   const consumeIdeOpen = useCallback(() => setPendingIdeOpen(null), []);
 
+  const requestOpenInDocs = useCallback(
+    (path: string) => {
+      setPendingDocsOpen(path);
+      onOpenDocs?.();
+    },
+    [onOpenDocs],
+  );
+
+  const consumeDocsOpen = useCallback(() => setPendingDocsOpen(null), []);
+
+  const requestOpenInSheet = useCallback(
+    (path: string) => {
+      setPendingSheetOpen(path);
+      onOpenSheet?.();
+    },
+    [onOpenSheet],
+  );
+
+  const consumeSheetOpen = useCallback(() => setPendingSheetOpen(null), []);
+
   const openInViewer = useCallback(
     (path: string) => {
       onOpenViewer?.(path);
@@ -141,9 +177,15 @@ export function WorkspaceProvider({
       copyPath,
       createFolder,
       requestOpenInIde,
+      requestOpenInDocs,
+      requestOpenInSheet,
       openInViewer,
       pendingIdeOpen,
       consumeIdeOpen,
+      pendingDocsOpen,
+      consumeDocsOpen,
+      pendingSheetOpen,
+      consumeSheetOpen,
     }),
     [
       attemptId,
@@ -158,9 +200,15 @@ export function WorkspaceProvider({
       copyPath,
       createFolder,
       requestOpenInIde,
+      requestOpenInDocs,
+      requestOpenInSheet,
       openInViewer,
       pendingIdeOpen,
       consumeIdeOpen,
+      pendingDocsOpen,
+      consumeDocsOpen,
+      pendingSheetOpen,
+      consumeSheetOpen,
     ],
   );
 

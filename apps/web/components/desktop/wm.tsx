@@ -6,6 +6,10 @@ import { useCallback, useRef, useState } from "react";
 export type AppId =
   | "messenger"
   | "ide"
+  | "mail"
+  | "docs"
+  | "sheet"
+  | "calendar"
   | "agent"
   | "files"
   | "terminal"
@@ -28,6 +32,10 @@ export interface WinState {
 const DEFAULTS: Record<AppId, Omit<WinState, "id" | "z">> = {
   messenger: { open: false, minimized: false, maximized: false, x: 120, y: 60, w: 780, h: 560 },
   ide: { open: false, minimized: false, maximized: false, x: 200, y: 40, w: 1000, h: 640 },
+  mail: { open: false, minimized: false, maximized: false, x: 160, y: 40, w: 1000, h: 640 },
+  docs: { open: false, minimized: false, maximized: false, x: 220, y: 50, w: 1020, h: 660 },
+  sheet: { open: false, minimized: false, maximized: false, x: 250, y: 70, w: 1020, h: 620 },
+  calendar: { open: false, minimized: false, maximized: false, x: 200, y: 60, w: 1060, h: 640 },
   agent: { open: false, minimized: false, maximized: false, x: 320, y: 110, w: 620, h: 580 },
   files: { open: false, minimized: false, maximized: false, x: 240, y: 80, w: 940, h: 580 },
   terminal: { open: false, minimized: false, maximized: false, x: 260, y: 200, w: 760, h: 420 },

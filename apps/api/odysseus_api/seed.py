@@ -47,6 +47,7 @@ def scenario_row(spec: dict, created_by) -> Scenario:
         checks=spec.get("checks", []),
         rubric=spec.get("rubric") or default_rubric(),
         agent_enabled=spec.get("agent_enabled", True),
+        desktop_apps=list(spec.get("desktop_apps") or []),
         created_by=created_by,
     )
 

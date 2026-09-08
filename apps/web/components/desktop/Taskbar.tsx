@@ -18,6 +18,10 @@ import {
   IconTerminal,
   IconGithub,
   IconGlobe,
+  IconDocs,
+  IconSheet,
+  IconMail,
+  IconCalendar,
 } from "@/components/icons";
 import type { AttemptScenario } from "@/lib/types";
 import { ContextMenuView, useContextMenu } from "./ContextMenu";
@@ -31,6 +35,10 @@ const APPS: { id: AppId; label: string; icon: React.ReactNode }[] = [
   { id: "files", label: "폴더", icon: <IconFolder size={17} /> },
   { id: "messenger", label: "메신저", icon: <IconMessenger size={17} /> },
   { id: "browser", label: "인터넷", icon: <IconGlobe size={17} /> },
+  { id: "mail", label: "메일", icon: <IconMail size={17} /> },
+  { id: "docs", label: "문서", icon: <IconDocs size={17} /> },
+  { id: "sheet", label: "표 계산", icon: <IconSheet size={17} /> },
+  { id: "calendar", label: "달력", icon: <IconCalendar size={17} /> },
   { id: "ide", label: "IDE", icon: <IconIde size={17} /> },
   { id: "agent", label: "AI 에이전트", icon: <IconAgent size={17} /> },
   { id: "github", label: "GitHub", icon: <IconGithub size={17} /> },

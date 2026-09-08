@@ -11,12 +11,16 @@ import { COPY_EVENT } from "@/lib/clipboard";
 import { Button, Spinner } from "@/components/ui";
 import {
   IconAgent,
+  IconCalendar,
+  IconDocs,
   IconFile,
   IconFolder,
   IconGithub,
   IconGlobe,
   IconIde,
+  IconMail,
   IconMessenger,
+  IconSheet,
   IconTerminal,
 } from "@/components/icons";
 import { useWindowManager, AppId } from "@/components/desktop/wm";
@@ -37,6 +41,10 @@ import { FilesApp } from "@/components/desktop/apps/FilesApp";
 import { TerminalApp } from "@/components/desktop/apps/TerminalApp";
 import { GithubApp } from "@/components/desktop/apps/GithubApp";
 import { BrowserApp } from "@/components/desktop/apps/BrowserApp";
+import { DocsApp } from "@/components/desktop/apps/DocsApp";
+import { SheetApp } from "@/components/desktop/apps/SheetApp";
+import { MailApp } from "@/components/desktop/apps/MailApp";
+import { CalendarApp } from "@/components/desktop/apps/CalendarApp";
 
 const ICONS: { id: AppId; label: string; icon: React.ReactNode; tile: string; glow: string }[] = [
   {
@@ -59,6 +67,34 @@ const ICONS: { id: AppId; label: string; icon: React.ReactNode; tile: string; gl
     icon: <IconMessenger size={30} />,
     tile: "from-violet-400 via-violet-500 to-fuchsia-600",
     glow: "group-hover:shadow-[0_0_26px_rgba(167,139,250,0.55)]",
+  },
+  {
+    id: "mail",
+    label: "메일",
+    icon: <IconMail size={30} />,
+    tile: "from-rose-400 via-rose-500 to-pink-600",
+    glow: "group-hover:shadow-[0_0_26px_rgba(251,113,133,0.55)]",
+  },
+  {
+    id: "docs",
+    label: "문서",
+    icon: <IconDocs size={30} />,
+    tile: "from-sky-400 via-blue-500 to-indigo-600",
+    glow: "group-hover:shadow-[0_0_26px_rgba(96,165,250,0.55)]",
+  },
+  {
+    id: "sheet",
+    label: "표 계산",
+    icon: <IconSheet size={30} />,
+    tile: "from-emerald-400 via-green-500 to-teal-600",
+    glow: "group-hover:shadow-[0_0_26px_rgba(52,211,153,0.55)]",
+  },
+  {
+    id: "calendar",
+    label: "달력",
+    icon: <IconCalendar size={30} />,
+    tile: "from-indigo-400 via-indigo-500 to-violet-600",
+    glow: "group-hover:shadow-[0_0_26px_rgba(129,140,248,0.55)]",
   },
   {
     id: "browser",
@@ -254,6 +290,17 @@ export default function ExamDesktopPage() {
   );
   const pushEvent = useActivityTracker(attemptId, Boolean(inProgress), scenarioId);
 
+  // 이 문제에서 제공되는 앱 — 시나리오가 목록을 지정하지 않았으면 전부 제공한다.
+  // (사무 시나리오는 터미널·IDE 없이 문서/표로 일한다. 도구가 곧 문제의 성격이다.)
+  const appAllowed = useCallback(
+    (id: AppId) => {
+      const allowed = scenario?.desktop_apps;
+      if (!allowed || allowed.length === 0) return true;
+      return (allowed as string[]).includes(id);
+    },
+    [scenario],
+  );
+
   const wm = useWindowManager((type, app) => pushEvent(type, { app }));
 
   // ── 시험장 이탈 방지 ────────────────────────────────────────
@@ -435,6 +482,8 @@ export default function ExamDesktopPage() {
       attemptId={attemptId}
       scenarioId={scenario.scenario_id}
       onOpenIde={() => openApp("ide")}
+      onOpenDocs={() => openApp("docs")}
+      onOpenSheet={() => openApp("sheet")}
       onOpenViewer={(path) => {
         setViewerPath(path);
         openApp("viewer");
@@ -496,6 +545,7 @@ export default function ExamDesktopPage() {
             if (it.id === "agent" && !scenario.agent_enabled) return null;
             if (it.id === "github" && !reference?.github_enabled) return null;
             if (it.id === "browser" && !reference?.web_enabled) return null;
+            if (!appAllowed(it.id)) return null;
             const selected = selectedIcon === it.id;
             return (
               <button
@@ -558,16 +608,66 @@ export default function ExamDesktopPage() {
             onActivity={() => undefined}
           />
         </Window>
-        <Window
-          win={wm.wins.ide}
-          wm={wm}
-          title={APP_META.ide.title}
-          accent={APP_META.ide.accent}
-          theme={APP_META.ide.theme}
-          icon={<IconIde size={15} />}
-        >
-          <IdeApp key={scenario.scenario_id} />
-        </Window>
+        {appAllowed("ide") && (
+          <Window
+            win={wm.wins.ide}
+            wm={wm}
+            title={APP_META.ide.title}
+            accent={APP_META.ide.accent}
+            theme={APP_META.ide.theme}
+            icon={<IconIde size={15} />}
+          >
+            <IdeApp key={scenario.scenario_id} />
+          </Window>
+        )}
+        {appAllowed("mail") && (
+          <Window
+            win={wm.wins.mail}
+            wm={wm}
+            title={APP_META.mail.title}
+            accent={APP_META.mail.accent}
+            theme={APP_META.mail.theme}
+            icon={<IconMail size={15} />}
+          >
+            <MailApp key={scenario.scenario_id} />
+          </Window>
+        )}
+        {appAllowed("docs") && (
+          <Window
+            win={wm.wins.docs}
+            wm={wm}
+            title={APP_META.docs.title}
+            accent={APP_META.docs.accent}
+            theme={APP_META.docs.theme}
+            icon={<IconDocs size={15} />}
+          >
+            <DocsApp key={scenario.scenario_id} />
+          </Window>
+        )}
+        {appAllowed("sheet") && (
+          <Window
+            win={wm.wins.sheet}
+            wm={wm}
+            title={APP_META.sheet.title}
+            accent={APP_META.sheet.accent}
+            theme={APP_META.sheet.theme}
+            icon={<IconSheet size={15} />}
+          >
+            <SheetApp key={scenario.scenario_id} />
+          </Window>
+        )}
+        {appAllowed("calendar") && (
+          <Window
+            win={wm.wins.calendar}
+            wm={wm}
+            title={APP_META.calendar.title}
+            accent={APP_META.calendar.accent}
+            theme={APP_META.calendar.theme}
+            icon={<IconCalendar size={15} />}
+          >
+            <CalendarApp key={scenario.scenario_id} />
+          </Window>
+        )}
         {scenario.agent_enabled && (
           <Window
             win={wm.wins.agent}
@@ -579,6 +679,7 @@ export default function ExamDesktopPage() {
             <AgentApp />
           </Window>
         )}
+        {appAllowed("files") && (
         <Window
           win={wm.wins.files}
           wm={wm}
@@ -589,17 +690,20 @@ export default function ExamDesktopPage() {
         >
           <FilesApp key={scenario.scenario_id} />
         </Window>
-        <Window
-          win={wm.wins.terminal}
-          wm={wm}
-          title={APP_META.terminal.title}
-          accent={APP_META.terminal.accent}
-          theme={APP_META.terminal.theme}
-          icon={<IconTerminal size={15} />}
-        >
-          <TerminalApp />
-        </Window>
-        {reference?.github_enabled && (
+        )}
+        {appAllowed("terminal") && (
+          <Window
+            win={wm.wins.terminal}
+            wm={wm}
+            title={APP_META.terminal.title}
+            accent={APP_META.terminal.accent}
+            theme={APP_META.terminal.theme}
+            icon={<IconTerminal size={15} />}
+          >
+            <TerminalApp />
+          </Window>
+        )}
+        {reference?.github_enabled && appAllowed("github") && (
           <Window
             win={wm.wins.github}
             wm={wm}
@@ -611,7 +715,7 @@ export default function ExamDesktopPage() {
             <GithubApp key={scenario.scenario_id} />
           </Window>
         )}
-        {reference?.web_enabled && (
+        {reference?.web_enabled && appAllowed("browser") && (
           <Window
             win={wm.wins.browser}
             wm={wm}

@@ -60,7 +60,17 @@ export interface InitialFile {
   content: string;
 }
 
-export type CheckType = "file_exists" | "file_contains" | "command";
+export type CheckType =
+  | "file_exists"
+  | "file_contains"
+  | "file_not_contains"
+  | "file_min_words"
+  | "file_max_words"
+  | "csv_cell"
+  | "csv_row_count"
+  | "csv_column_sum"
+  | "csv_column_unique"
+  | "command";
 
 export interface Check {
   label: string;
@@ -69,8 +79,32 @@ export interface Check {
   pattern?: string | null;
   command?: string | null;
   expected_stdout?: string | null;
+  /** csv_cell / csv_column_sum / csv_column_unique — 값을 읽을 열 이름 */
+  column?: string | null;
+  /** csv_* — 행 조건 "열이름=값" (csv_cell 은 첫 일치 행, 나머지는 일치 행 전체) */
+  row_match?: string | null;
+  /** csv_cell(칸 값) / csv_row_count(행 수) / csv_column_sum(합계) 의 기대값 */
+  expected?: string | null;
+  /** csv_cell / csv_column_sum — 숫자 비교 허용 오차 */
+  tolerance?: number | null;
+  /** file_min_words — 최소 단어 수 */
+  min_count?: number | null;
+  /** file_max_words — 최대 단어 수 */
+  max_count?: number | null;
   points: number;
 }
+
+/** 시험 데스크톱에서 시나리오별로 켜고 끌 수 있는 앱 (빈 배열 = 전부 제공) */
+export type DesktopAppId =
+  | "terminal"
+  | "files"
+  | "mail"
+  | "docs"
+  | "sheet"
+  | "calendar"
+  | "browser"
+  | "ide"
+  | "github";
 
 export interface RubricItem {
   name: string;
@@ -112,6 +146,8 @@ export interface Scenario {
   checks: Check[];
   rubric: Rubric;
   agent_enabled: boolean;
+  /** 이 시나리오에서 제공할 앱 (빈 배열 = 전부) */
+  desktop_apps?: DesktopAppId[];
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -187,6 +223,8 @@ export interface AttemptScenario {
   ordinal: number;
   points: number;
   agent_enabled: boolean;
+  /** 이 문제에서 열 수 있는 앱 (빈 배열 = 전부) */
+  desktop_apps?: DesktopAppId[];
   characters: AttemptCharacter[];
   /** 순차 진행 상태 */
   status: "completed" | "in_progress" | "locked";
@@ -628,6 +666,7 @@ export interface ScenarioDraft {
   checks: Check[];
   rubric: Rubric | null;
   agent_enabled: boolean;
+  desktop_apps?: DesktopAppId[];
 }
 
 export interface AuthorResult {
@@ -639,7 +678,11 @@ export interface AuthorResult {
 
 /** 대화형 설계 — 서버가 검증해 흘려보내는 편집 명령 */
 export type AuthorOp =
-  | { op: "set"; field: "title" | "summary" | "difficulty" | "briefing_md" | "objectives_md" | "agent_enabled"; value: string | boolean }
+  | {
+      op: "set";
+      field: "title" | "summary" | "difficulty" | "briefing_md" | "objectives_md" | "agent_enabled" | "desktop_apps";
+      value: string | boolean | string[];
+    }
   | { op: "upsert_character"; value: Character }
   | { op: "remove_character"; key: string }
   | { op: "set_opening"; value: OpeningMessage[] }

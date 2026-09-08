@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from .desktop import allowed_desktop_apps
 from .models import AiProvider, Assessment, AssessmentScenario, Attempt, Scenario
 from .requirements_graph import build_requirement_graph
 
@@ -54,6 +55,7 @@ def scenario_to_spec(scenario: Scenario, *, ordinal: int, points: int) -> dict:
         "npc_base_prompt": scenario.npc_base_prompt,
         "checks": checks,
         "rubric": rubric,
+        "desktop_apps": allowed_desktop_apps(scenario.desktop_apps or []),
         "requirement_graph": build_requirement_graph(
             objectives_md=scenario.objectives_md,
             characters=characters,
@@ -156,6 +158,7 @@ class FrozenScenario:
     rubric: dict
     requirement_graph: dict
     agent_enabled: bool
+    desktop_apps: list
     ordinal: int
     points: int
 
@@ -193,6 +196,8 @@ def scenario_from_definition(definition: dict, scenario_id: uuid.UUID | str) -> 
             rubric=rubric,
             requirement_graph=requirement_graph,
             agent_enabled=bool(spec.get("agent_enabled", True)),
+            # v1/v2 스냅샷에는 이 키가 없다 — 그때의 화면과 같도록 전부 제공한다.
+            desktop_apps=allowed_desktop_apps(spec.get("desktop_apps") or []),
             ordinal=int(spec.get("ordinal", 0) or 0),
             points=int(spec.get("points", 0) or 0),
         )

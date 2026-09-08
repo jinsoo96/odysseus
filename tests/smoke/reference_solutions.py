@@ -477,6 +477,15 @@ REFERENCE_SOLUTIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# 사무 트랙(b01–b10)과 일반 문제 해결 트랙(g01–)의 참조 해답은 별도 모듈에 있다 —
+# 문서·표가 길어서 여기 섞으면 읽히지 않는다.
+# 같은 값을 tests/unit/test_scenario_presets.py 가 도커 없이 검증한다.
+from business_solutions import BUSINESS_SOLUTIONS  # noqa: E402
+from general_solutions import GENERAL_SOLUTIONS  # noqa: E402
+
+REFERENCE_SOLUTIONS.update(BUSINESS_SOLUTIONS)
+REFERENCE_SOLUTIONS.update(GENERAL_SOLUTIONS)
+
 #: 해답 적용 후 실행해야 하는 명령 (산출물을 코드로 만들어야 하는 시나리오)
 REFERENCE_COMMANDS: dict[str, list[str]] = {
     "추론 게이트웨이가 SLO를 못 맞추고 비용도 넘겼다": ["python3 analyze.py"],

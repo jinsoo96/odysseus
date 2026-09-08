@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import workspace as ws
+from ..checks import FILE_CHECK_TYPES, evaluate_file_check
 from ..config import settings
 from ..models import (
     AgentMessage,
@@ -83,7 +84,7 @@ async def run_checks(
     """시나리오 checks 실행 → [{label, type, passed, points, earned, detail}]."""
     results: list[dict] = []
     files = await ws.list_files(db, attempt.id, scenario.id)
-    by_path = {f.path: f for f in files}
+    contents = {f.path: f.content for f in files}
 
     for check in scenario.checks or []:
         ctype = check.get("type")
@@ -97,22 +98,12 @@ async def run_checks(
             "detail": "",
         }
         try:
-            if ctype == "file_exists":
-                path = str(check.get("path", ""))
-                entry["passed"] = path in by_path
-                entry["detail"] = path if entry["passed"] else f"{path} 없음"
-            elif ctype == "file_contains":
-                path = str(check.get("path", ""))
-                row = by_path.get(path)
-                if not row:
-                    entry["detail"] = f"{path} 없음"
-                else:
-                    pattern = str(check.get("pattern", ""))
-                    # 줄바꿈 정규화 — csv.writer 등이 남기는 CRLF 때문에 정답이
-                    # `$` 앵커에 걸리지 않던 문제(응시자에게 불리한 오채점)를 막는다.
-                    text = row.content.replace("\r\n", "\n").replace("\r", "\n")
-                    entry["passed"] = bool(re.search(pattern, text, re.MULTILINE))
-                    entry["detail"] = f"{path} 에서 /{pattern}/ " + ("일치" if entry["passed"] else "불일치")
+            if ctype in FILE_CHECK_TYPES:
+                # 파일만 보고 판정하는 체크는 순수 함수(checks.py)가 처리한다 —
+                # 자동평가와 오프라인 검증이 같은 판정을 내도록.
+                passed, detail = evaluate_file_check(check, contents)
+                entry["passed"] = passed
+                entry["detail"] = detail
             elif ctype == "command":
                 command = str(check.get("command", "")).strip()
                 execution = Execution(

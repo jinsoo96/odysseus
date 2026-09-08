@@ -24,10 +24,49 @@
 - **오프닝 메시지** — 응시 시작 시 도착해 있는 메시지. 응시자의 유일한 출발점
 - **초기 파일** — 워크스페이스 초기 상태(데이터·버그 코드·문서)
 - **숨은 요구사항** — 정답 정의. NPC 의 배경 지식과 자동평가 기준으로만 쓰이며 응시자에게 노출되지 않음
-- **자동 체크** — `file_exists` / `file_contains`(정규식) / `command`(샌드박스 실행)
+- **자동 체크** — 실행이 필요한 것과 필요 없는 것으로 나뉩니다.
+  | 종류 | 쓰는 곳 | 필요한 필드 |
+  |---|---|---|
+  | `file_exists` | 산출물이 만들어졌는가 | `path` |
+  | `file_contains` | 필수 수치·문장이 있는가 (정규식) | `path`, `pattern` |
+  | `file_not_contains` | 금칙어를 피했는가 (정규식, 대소문자 무시) | `path`, `pattern` |
+  | `file_min_words` | 껍데기가 아닌 분량인가 | `path`, `min_count` |
+  | `file_max_words` | 짧게 쓰는 것이 요구사항인가 (한 장 보고·공지) | `path`, `max_count` |
+  | `csv_cell` | 표의 특정 칸이 정확한가 | `path`, `column`, `expected`, (`row_match`, `tolerance`) |
+  | `csv_row_count` | 행 수가 맞는가 (조건에 맞는 행이 0개인 것도 답이 된다) | `path`, `expected`, (`row_match`) |
+  | `csv_column_sum` | 열 합계가 맞는가 (총액·총원) | `path`, `column`, `expected`, (`row_match`, `tolerance`) |
+  | `csv_column_unique` | 같은 값을 두 번 넣지 않았는가 (배정표·일정표) | `path`, `column`, (`row_match`) |
+  | `command` | 코드가 실제로 도는가 (샌드박스 실행) | `command`, (`expected_stdout`) |
+
+  `command` 를 뺀 나머지는 서버가 파일만 보고 판정하므로 러너가 필요 없습니다(`apps/api/odysseus_api/checks.py`).
+  `csv_cell` 은 열 이름의 대소문자·공백·`_` 차이를 무시하고, 값이 숫자로 읽히면 `1,234,000원` 같은 표기를
+  정규화해 비교합니다 — 채점이 표기 습관을 벌하지 않기 위해서입니다.
+- **제공 앱(`desktop_apps`)** — 이 시나리오의 시험 데스크톱에 띄울 앱 목록. 비워 두면 전부 제공(기존 동작)이고,
+  사무 과제는 보통 `files·docs·sheet(·mail·calendar·browser)` 만 켜서 터미널과 IDE 를 숨깁니다. 화면에 있는 도구가
+  "이건 어떤 종류의 문제인가"라는 신호이기 때문입니다. 업무 성격별 조합은
+  `apps/api/odysseus_api/desktop.py` 의 `APP_PRESETS`(engineering / office / communication / analysis / coordination)
+  에 있습니다.
 - **루브릭** — 과정(요구사항 파악·커뮤니케이션·작업 과정) / 결과(요구 충족·구현 품질)
 
-기본 제공 시나리오 6종(집계 버그 · docker compose GPU 서빙 · Kubernetes 스케줄링 · KVM GPU 패스스루 · 게이트웨이 로그 분석 · 배치 경쟁 조건)은 모두 **참조 해답으로 만점이 검증**되어 있습니다.
+기본 제공 시나리오는 세 갈래이고, 시험 프리셋 13종이 이들을 묶습니다.
+
+- **엔지니어링 6종** (`scenarios/s01`–`s06`) — 집계 버그 · docker compose GPU 서빙 · Kubernetes 스케줄링 ·
+  KVM GPU 패스스루 · 게이트웨이 로그 분석 · 배치 경쟁 조건.
+- **사무 업무 13종** (`scenarios/b01`–`b13`) — 분기 실적 보고서 · 회의록 정리 · 벤더 선정 · 고객 클레임 ·
+  출고 계획 · 예산 분석 · 갈등 중재 · 우선순위 조정 · 장애 공지 · 면접 일정 · 출장비 정산 검증 ·
+  설문 한 장 보고 · 온보딩 일정.
+- **일반 문제 해결 6종** (`scenarios/g01`–`g06`) — 워크숍 장소 선정 · 당직 근무표 · 복합기 수리와 교체 ·
+  재택근무 갈등 조율 · 좌석 재배치 · 환불 판정. 직무 지식 없이 조건 수집과 판단만으로 풀리며,
+  조건의 절반이 파일이 아니라 관계자에게 있습니다.
+
+뒤의 두 갈래는 산출물이 문서와 표라서 체크가 전부 파일 기반이고, 데스크톱에서 터미널·IDE 를 뺍니다
+(`scenarios.OFFICE_SCENARIOS`).
+
+모두 **참조 해답으로 검증**되어 있습니다. 엔지니어링 트랙은 스택을 띄워
+`tests/smoke/test_scenarios.py` 가, 사무·일반 트랙은 도커 없이 `tests/unit/test_scenario_presets.py` 가
+초기 상태에서는 체크가 전부 실패하고(문제가 성립하고) 참조 해답에서는 전부 통과함을(정답이 존재함을)
+매 CI 마다 확인합니다. 참조 해답은 `tests/smoke/business_solutions.py`(b 트랙)와
+`tests/smoke/general_solutions.py`(g 트랙)에 있습니다.
 
 ## 아키텍처
 
@@ -121,6 +160,9 @@ sudo ./scripts/restore.sh /var/backups/odysseus/ (암호화, root 전용)<file>.
 전부 **실행해서** 확인합니다 — 격리는 실제로 남의 파일을 읽어 보고, 강제 종료는 프로세스가 정말 사라졌는지 보고, 백업은 임시 DB 에 실제로 복원해 봅니다.
 
 ```bash
+# 스택 없이 도는 것들 (CI 가 매번 실행)
+PYTHONPATH=apps/api python3 -m unittest discover -s tests/unit -p 'test_*.py'   # 신뢰성 코어 + 시나리오 프리셋 검증
+
 python3 tests/smoke/mock_llm.py &                       # 모의 LLM (NPC·에이전트·평가·설계자)
 GW=$(docker network inspect odysseus_backplane -f '{{(index .IPAM.Config 0).Gateway}}')
 

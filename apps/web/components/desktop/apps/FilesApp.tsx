@@ -13,6 +13,8 @@ import {
   IconDelete,
   IconGridView,
   IconIde,
+  IconDocs,
+  IconSheet,
   IconListView,
   IconMonitor,
   IconNewFile,
@@ -79,6 +81,10 @@ function allDirs(files: FileEntry[]): string[] {
 
 /** 폴더(탐색기) — Windows 탐색기 규약: 뒤로/앞으로/위로, 주소 표시줄, 목록/아이콘 보기,
  *  클릭=선택(+미리보기), 더블클릭=폴더 진입/뷰어 열기. */
+/** 문서/표 앱이 다루는 확장자 — 우클릭 메뉴가 알맞은 앱을 먼저 제안한다. */
+const DOC_EXTS = new Set(["md", "markdown", "txt"]);
+const SHEET_EXTS = new Set(["csv", "tsv"]);
+
 export function FilesApp({ readOnly = false }: { readOnly?: boolean }) {
   const ws = useWorkspace();
   const { toast, confirm } = useToast();
@@ -237,7 +243,13 @@ export function FilesApp({ readOnly = false }: { readOnly?: boolean }) {
     const items: MenuEntry[] = [
       { label: e.isDir ? "열기" : "뷰어로 열기", onClick: () => activate(e) },
     ];
-    if (!e.isDir) items.push({ label: "IDE에서 열기", onClick: () => ws.requestOpenInIde(e.path) });
+    if (!e.isDir) {
+      // 파일 성격에 맞는 앱을 먼저 제안한다 — 보고서를 IDE로 여는 것은 사무 과제에서 이상하다.
+      const ext = e.name.split(".").pop()?.toLowerCase() ?? "";
+      if (DOC_EXTS.has(ext)) items.push({ label: "문서 편집기에서 열기", onClick: () => ws.requestOpenInDocs(e.path) });
+      if (SHEET_EXTS.has(ext)) items.push({ label: "표 편집기에서 열기", onClick: () => ws.requestOpenInSheet(e.path) });
+      items.push({ label: "IDE에서 열기", onClick: () => ws.requestOpenInIde(e.path) });
+    }
     if (!readOnly) {
       items.push("separator");
       items.push({ label: "이름 바꾸기", shortcut: "F2", onClick: () => { setSelected(e.path); setDraftError(""); setDraft({ kind: "rename", target: e.path, value: e.name }); } });
@@ -625,6 +637,24 @@ export function FilesApp({ readOnly = false }: { readOnly?: boolean }) {
                 <span className="min-w-0 truncate font-mono text-xs text-slate-600">{previewFile.name}</span>
               </span>
               <div className="flex shrink-0 items-center gap-1">
+                {DOC_EXTS.has(previewFile.name.split(".").pop()?.toLowerCase() ?? "") && (
+                  <button
+                    title="문서 편집기에서 열기"
+                    onClick={() => ws.requestOpenInDocs(previewFile.path)}
+                    className="flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    <IconDocs size={12} /> 문서
+                  </button>
+                )}
+                {SHEET_EXTS.has(previewFile.name.split(".").pop()?.toLowerCase() ?? "") && (
+                  <button
+                    title="표 편집기에서 열기"
+                    onClick={() => ws.requestOpenInSheet(previewFile.path)}
+                    className="flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-600 hover:bg-slate-50"
+                  >
+                    <IconSheet size={12} /> 표
+                  </button>
+                )}
                 <button
                   title="IDE에서 열기"
                   onClick={() => ws.requestOpenInIde(previewFile.path)}

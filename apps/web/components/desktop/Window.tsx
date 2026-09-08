@@ -179,6 +179,10 @@ export const APP_META: Record<
 > = {
   messenger: { title: "메신저", accent: "bg-violet-50", theme: "light" },
   ide: { title: "IDE", accent: "bg-slate-100", theme: "dark" },
+  mail: { title: "메일", accent: "bg-rose-50", theme: "light" },
+  docs: { title: "문서", accent: "bg-sky-50", theme: "light" },
+  sheet: { title: "표 계산", accent: "bg-emerald-50", theme: "light" },
+  calendar: { title: "달력", accent: "bg-indigo-50", theme: "light" },
   agent: { title: "AI 에이전트", accent: "bg-sky-50", theme: "light" },
   files: { title: "폴더", accent: "bg-amber-50", theme: "light" },
   terminal: { title: "터미널", accent: "bg-slate-100", theme: "dark" },

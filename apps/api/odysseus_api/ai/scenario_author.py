@@ -17,12 +17,25 @@ import re
 import unicodedata
 
 from ..schemas import ScenarioIn
+from ..checks import as_number
+from ..desktop import normalize_desktop_apps
 from . import provider
 from .autoeval import default_rubric
 
 AUTHOR_MARKER = "odysseus-scenario-author/1"
 COLORS = ["#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981", "#ef4444", "#ec4899", "#6366f1", "#14b8a6"]
-CHECK_TYPES = {"file_exists", "file_contains", "command"}
+CHECK_TYPES = {
+    "file_exists",
+    "file_contains",
+    "file_not_contains",
+    "file_min_words",
+    "file_max_words",
+    "csv_cell",
+    "csv_row_count",
+    "csv_column_sum",
+    "csv_column_unique",
+    "command",
+}
 DIFFICULTIES = {"easy", "medium", "hard"}
 
 SYSTEM = f"""You are the scenario designer for Odysseus, a work-simulation assessment
@@ -83,6 +96,32 @@ deliberately scattered across people and files.
    go, java, gcc, git, sqlite3, jq — **no network**. Do not require pip
    installs or external services. Paths are relative (`data/orders.csv`,
    `output/report.csv`). Scripts are run with commands like `python3 report.py`.
+11. **Not every job is an engineering job.** Odysseus also assesses office
+    work: reports, meeting minutes, vendor comparisons, customer replies,
+    conflict mediation, incident notices, scheduling under constraints. For
+    those, the deliverable is a document (`output/…md`) or a table
+    (`output/…csv`) — not code — and the desktop should say so: set
+    `desktop_apps` to `["files","docs","sheet","browser"]` (office),
+    `["files","mail","docs"]` (a task that starts from a received mail) or
+    `["files","calendar","sheet","docs","mail"]` (scheduling/coordination)
+    so the terminal and IDE do not imply a coding task. When you enable
+    `mail`, put the received message in the workspace as `mail/inbox/….txt`
+    with `보낸사람:`/`제목:`/`날짜:` headers; when you enable `calendar`, make
+    the schedule data a CSV with `date` and `start` columns so the calendar
+    can render it. Grade them with `file_min_words` (substance),
+    `file_max_words` (a deliverable that must stay short — a press release,
+    a one-page notice), `file_contains` (required facts/figures),
+    `file_not_contains` (a phrase policy forbids — e.g. admitting legal
+    liability, naming an unconfirmed cause), `csv_cell` (an exact number in
+    a table), `csv_row_count` (how many rows survive a rule — optionally
+    filtered with `row_match`, e.g. `verdict=반려`), `csv_column_sum` (a
+    total that must come out right no matter how it was split) and
+    `csv_column_unique` (no one assigned twice in a roster). Never a
+    `command` check when the candidate has no terminal.
+12. **Traps for office work are policy traps.** A rule in a document that
+    contradicts what the requester assumes, an exception condition only one
+    person knows, a number that must exclude cancelled rows, a deadline that
+    must be computed from "next Wednesday".
 10. **Korean everywhere** for names, messages, files' human text, briefing,
     objectives. Character keys are ASCII slugs like `pm_sujin`.
 
@@ -99,9 +138,17 @@ Return **only** a JSON object, no prose, no code fences:
   "objectives_md": "…",
   "checks": [{{"label":"…","type":"file_exists","path":"output/x.csv","points":10}},
              {{"label":"…","type":"file_contains","path":"output/x.csv","pattern":"^…$","points":15}},
+             {{"label":"…","type":"file_not_contains","path":"output/reply.md","pattern":"전액\\s*환불","points":10}},
+             {{"label":"…","type":"file_min_words","path":"output/report.md","min_count":250,"points":10}},
+             {{"label":"…","type":"file_max_words","path":"output/press.md","max_count":320,"points":8}},
+             {{"label":"…","type":"csv_cell","path":"output/summary.csv","column":"revenue","row_match":"branch=서울","expected":"128400000","points":15}},
+             {{"label":"…","type":"csv_row_count","path":"output/audit.csv","row_match":"verdict=반려","expected":"4","points":12}},
+             {{"label":"…","type":"csv_column_sum","path":"output/audit.csv","column":"reclaim","expected":"186000","tolerance":0,"points":12}},
+             {{"label":"…","type":"csv_column_unique","path":"output/roster.csv","column":"date","points":8}},
              {{"label":"…","type":"command","command":"python3 x.py","expected_stdout":"…","points":10}}],
   "rubric": null,
   "agent_enabled": true,
+  "desktop_apps": ["files","docs","sheet","browser"],
   "design_notes": "관리자에게: 정보를 어떻게 나눴고 함정이 무엇이며 체크 값을 어떻게 계산했는지 (한국어, 5–10문장)"
 }}
 `rubric` may be null to use the platform default. Keep the whole response
@@ -260,13 +307,13 @@ def normalize_scenario(raw: dict) -> tuple[dict, list[str]]:
             warnings.append(f"체크 '{label}': 알 수 없는 종류 '{ctype}' 제외")
             continue
         entry: dict = {"label": label, "type": ctype, "points": points}
-        if ctype in ("file_exists", "file_contains"):
+        if ctype != "command":
             p = _path(c.get("path"))
             if not p:
                 warnings.append(f"체크 '{label}': 경로 없음 — 제외")
                 continue
             entry["path"] = p
-        if ctype == "file_contains":
+        if ctype in ("file_contains", "file_not_contains"):
             pattern = str(c.get("pattern") or "")
             try:
                 re.compile(pattern)
@@ -277,6 +324,43 @@ def normalize_scenario(raw: dict) -> tuple[dict, list[str]]:
                 warnings.append(f"체크 '{label}': 패턴 없음 — 제외")
                 continue
             entry["pattern"] = pattern[:1000]
+        if ctype == "file_min_words":
+            need = _int(c.get("min_count"), 1, 100000, 0)
+            if not need:
+                warnings.append(f"체크 '{label}': 최소 단어 수 없음 — 제외")
+                continue
+            entry["min_count"] = need
+        if ctype == "file_max_words":
+            limit = _int(c.get("max_count"), 1, 100000, 0)
+            if not limit:
+                warnings.append(f"체크 '{label}': 최대 단어 수 없음 — 제외")
+                continue
+            entry["max_count"] = limit
+        if ctype in ("csv_cell", "csv_row_count", "csv_column_sum", "csv_column_unique"):
+            column = str(c.get("column") or "").strip()
+            expected = str(c.get("expected") or "").strip()
+            if ctype != "csv_row_count" and not column:
+                warnings.append(f"체크 '{label}': 열 이름 없음 — 제외")
+                continue
+            if ctype != "csv_column_unique" and not expected:
+                warnings.append(f"체크 '{label}': 기대값 없음 — 제외")
+                continue
+            if ctype in ("csv_row_count", "csv_column_sum") and as_number(expected) is None:
+                warnings.append(f"체크 '{label}': 기대값이 숫자가 아님 — 제외")
+                continue
+            if column:
+                entry["column"] = column[:200]
+            if expected and ctype != "csv_column_unique":
+                entry["expected"] = expected[:500]
+            row_match = str(c.get("row_match") or "").strip()
+            if row_match and "=" not in row_match:
+                warnings.append(f"체크 '{label}': row_match 형식('열=값') 아님 — 행 조건 무시")
+                row_match = ""
+            if row_match:
+                entry["row_match"] = row_match[:400]
+            tolerance = c.get("tolerance")
+            if isinstance(tolerance, (int, float)) and tolerance >= 0:
+                entry["tolerance"] = float(tolerance)
         if ctype == "command":
             cmd = str(c.get("command") or "").strip()
             if not cmd:
@@ -310,6 +394,7 @@ def normalize_scenario(raw: dict) -> tuple[dict, list[str]]:
         "checks": checks,
         "rubric": rubric,
         "agent_enabled": bool(raw.get("agent_enabled", True)),
+        "desktop_apps": normalize_desktop_apps(raw.get("desktop_apps") or []),
     }
     # 최종 관문 — 저장 스키마가 거부할 것이면 여기서 알아야 한다
     ScenarioIn.model_validate(scenario)
@@ -361,7 +446,7 @@ async def author_scenario(
 # ═══════════════════════════════════════════════════════════════
 
 CHAT_MARKER = "odysseus-scenario-author/2"
-SCALAR_FIELDS = {"title", "summary", "difficulty", "briefing_md", "objectives_md", "agent_enabled"}
+SCALAR_FIELDS = {"title", "summary", "difficulty", "briefing_md", "objectives_md", "agent_enabled", "desktop_apps"}
 
 CHAT_SYSTEM = SYSTEM.replace(AUTHOR_MARKER, CHAT_MARKER).split("## Output")[0] + f"""## How you work (conversation)
 You are in a **multi-turn conversation** with the scenario author. They may
@@ -385,6 +470,7 @@ Only emit commands for what changes; leave the rest alone.
 {{"op":"set","field":"title","value":"…"}}                      fields: title, summary,
 {{"op":"set","field":"difficulty","value":"easy|medium|hard"}}   difficulty, briefing_md,
 {{"op":"set","field":"briefing_md","value":"…"}}                 objectives_md, agent_enabled
+{{"op":"set","field":"desktop_apps","value":["files","docs","sheet","browser"]}}   제공 앱 (빈 배열 = 전부)
 {{"op":"upsert_character","value":{{"key":"pm_sujin","name":"…","role":"…","persona":"…","knowledge":"…"}}}}
 {{"op":"remove_character","key":"pm_sujin"}}
 {{"op":"set_opening","value":[{{"character_key":"pm_sujin","content":"…"}}]}}
@@ -405,6 +491,7 @@ def _label_for(op: dict) -> str:
         return {
             "title": "제목", "summary": "한 줄 요약", "difficulty": "난이도",
             "briefing_md": "시작 화면 안내", "objectives_md": "숨은 요구사항", "agent_enabled": "에이전트 사용",
+            "desktop_apps": "제공 앱",
         }.get(op.get("field", ""), op.get("field", ""))
     if kind == "upsert_character":
         return f"인물 · {op['value'].get('name', '')}"
@@ -440,6 +527,8 @@ def validate_op(op: dict, draft: dict) -> tuple[dict | None, list[str]]:
                 value = "medium"
         elif field == "agent_enabled":
             value = bool(value)
+        elif field == "desktop_apps":
+            value = normalize_desktop_apps(value if isinstance(value, list) else [])
         else:
             limit = {"title": 200, "summary": 2000, "briefing_md": 40000, "objectives_md": 32000}[field]
             value = str(value or "").strip()[:limit]
@@ -617,6 +706,7 @@ def empty_draft() -> dict:
         "title": "", "summary": "", "difficulty": "medium", "briefing_md": "",
         "characters": [], "opening_messages": [], "initial_files": [],
         "objectives_md": "", "checks": [], "rubric": default_rubric(), "agent_enabled": True,
+        "desktop_apps": [],
     }
 
 
