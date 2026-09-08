@@ -3,7 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
-import type { AuthorOp, Character, Check, CheckType, InitialFile, OpeningMessage, Rubric, Scenario, ScenarioDraft } from "@/lib/types";
+import type {
+  AuthorOp,
+  Character,
+  Check,
+  CheckType,
+  DesktopAppId,
+  InitialFile,
+  OpeningMessage,
+  Rubric,
+  Scenario,
+  ScenarioDraft,
+} from "@/lib/types";
 import { ScenarioAuthorChat } from "@/components/ScenarioAuthorChat";
 import { CodeEditor } from "@/components/CodeEditor";
 import { Markdown } from "@/components/Markdown";
@@ -33,11 +44,45 @@ const emptyCharacter = (n: number): Character => ({
   knowledge: "",
 });
 
+/** 시험 데스크톱에서 시나리오별로 켜고 끌 수 있는 앱 (서버 desktop.OPTIONAL_APPS 와 같은 순서) */
+const DESKTOP_APP_OPTIONS: { id: DesktopAppId; label: string }[] = [
+  { id: "terminal", label: "터미널" },
+  { id: "files", label: "폴더" },
+  { id: "mail", label: "메일" },
+  { id: "docs", label: "문서" },
+  { id: "sheet", label: "표 계산" },
+  { id: "calendar", label: "달력" },
+  { id: "browser", label: "인터넷" },
+  { id: "ide", label: "IDE" },
+  { id: "github", label: "GitHub" },
+];
+
+const APP_PRESETS: { label: string; apps: DesktopAppId[] }[] = [
+  { label: "엔지니어링", apps: ["terminal", "files", "ide", "docs", "sheet", "browser", "github"] },
+  { label: "사무·문서", apps: ["files", "mail", "docs", "sheet", "browser"] },
+  { label: "커뮤니케이션", apps: ["files", "mail", "docs"] },
+  { label: "분석", apps: ["files", "sheet", "docs", "browser"] },
+  { label: "조율·일정", apps: ["files", "calendar", "sheet", "docs", "mail"] },
+];
+
 const CHECK_TYPE_LABEL: Record<CheckType, string> = {
   file_exists: "파일 존재",
   file_contains: "파일 내용 (정규식)",
+  file_not_contains: "금칙어 없음 (정규식)",
+  file_min_words: "최소 분량 (단어 수)",
+  file_max_words: "최대 분량 (단어 수)",
+  csv_cell: "표의 특정 값 (CSV)",
+  csv_row_count: "표의 행 수 (CSV)",
+  csv_column_sum: "표 열의 합계 (CSV)",
+  csv_column_unique: "표 열의 값 중복 없음 (CSV)",
   command: "명령 실행",
 };
+
+/** 이 체크 종류가 쓰는 입력칸 — 스튜디오가 필요한 것만 보여 준다. */
+const CSV_CHECKS: CheckType[] = ["csv_cell", "csv_row_count", "csv_column_sum", "csv_column_unique"];
+const NEEDS_COLUMN: CheckType[] = ["csv_cell", "csv_column_sum", "csv_column_unique"];
+const NEEDS_EXPECTED: CheckType[] = ["csv_cell", "csv_row_count", "csv_column_sum"];
+const NEEDS_TOLERANCE: CheckType[] = ["csv_cell", "csv_column_sum"];
 
 function langOf(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
@@ -70,6 +115,8 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
   };
   const [briefingPreview, setBriefingPreview] = useState(false);
   const [agentEnabled, setAgentEnabled] = useState(initial?.agent_enabled ?? true);
+  // 이 시나리오에서 제공할 앱 — 비어 있으면 전부 제공(기존 동작)
+  const [desktopApps, setDesktopApps] = useState<DesktopAppId[]>(initial?.desktop_apps ?? []);
   const [characters, setCharacters] = useState<Character[]>(initial?.characters ?? []);
   const [opening, setOpening] = useState<OpeningMessage[]>(initial?.opening_messages ?? []);
   const [files, setFiles] = useState<InitialFile[]>(initial?.initial_files ?? []);
@@ -107,12 +154,13 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
   const getDraft = (): ScenarioDraft => ({
     title, summary, difficulty, briefing_md: briefing, characters, opening_messages: opening,
     initial_files: files, objectives_md: objectives, checks, rubric, agent_enabled: agentEnabled,
+    desktop_apps: desktopApps,
   });
   const applyDraft = (d: ScenarioDraft) => {
     setTitle(d.title); setSummary(d.summary); setDifficulty(d.difficulty); setBriefing(d.briefing_md);
     setCharacters(d.characters); setOpening(d.opening_messages); setFiles(d.initial_files);
     setActiveFile(d.initial_files[0]?.path ?? null); setObjectives(d.objectives_md); setChecks(d.checks);
-    setRubric(d.rubric); setAgentEnabled(d.agent_enabled);
+    setRubric(d.rubric); setAgentEnabled(d.agent_enabled); setDesktopApps(d.desktop_apps ?? []);
   };
   const hasContent = Boolean(title.trim() || characters.length || files.length || objectives.trim());
 
@@ -127,6 +175,7 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
         else if (op.field === "briefing_md") setBriefing(String(v));
         else if (op.field === "objectives_md") setObjectives(String(v));
         else if (op.field === "agent_enabled") setAgentEnabled(Boolean(v));
+        else if (op.field === "desktop_apps") setDesktopApps((Array.isArray(v) ? v : []) as DesktopAppId[]);
         mark(op.field);
         setTab(op.field === "objectives_md" ? "grading" : "basic");
         return;
@@ -195,6 +244,7 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
       checks,
       rubric,
       agent_enabled: agentEnabled,
+      desktop_apps: desktopApps,
     };
     try {
       if (scenarioId) await api.put(`/scenarios/${scenarioId}`, body);
@@ -338,6 +388,55 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
             <input type="checkbox" checked={agentEnabled} onChange={(e) => setAgentEnabled(e.target.checked)} />
             AI 에이전트 앱 허용 (응시자가 파일 조작 가능한 어시스턴트 사용)
           </label>
+
+          <div className={`space-y-2 rounded-xl border border-slate-200 p-4 ${hl("desktop_apps")}`}>
+            <p className="text-sm font-semibold text-slate-700">시험 데스크톱에 제공할 앱</p>
+            <p className="text-xs text-slate-400">
+              아무것도 고르지 않으면 <b>전부 제공</b>합니다(기존 동작). 사무·커뮤니케이션 과제라면 터미널과 IDE를 빼는 편이
+              좋습니다 — 화면에 있는 도구가 곧 &ldquo;이건 어떤 종류의 문제인가&rdquo;라는 신호이기 때문입니다.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {DESKTOP_APP_OPTIONS.map((app) => {
+                const on = desktopApps.includes(app.id);
+                return (
+                  <button
+                    key={app.id}
+                    type="button"
+                    onClick={() =>
+                      setDesktopApps((cur) => (on ? cur.filter((x) => x !== app.id) : [...cur, app.id]))
+                    }
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                      on
+                        ? "border-sky-400 bg-sky-50 text-sky-700"
+                        : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
+                    }`}
+                  >
+                    {app.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-slate-400">
+              <span>빠른 설정:</span>
+              {APP_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => setDesktopApps(preset.apps)}
+                  className="rounded-md border border-slate-200 px-2 py-1 text-slate-500 hover:bg-slate-50"
+                >
+                  {preset.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setDesktopApps([])}
+                className="rounded-md border border-slate-200 px-2 py-1 text-slate-500 hover:bg-slate-50"
+              >
+                전부 제공(기본)
+              </button>
+            </div>
+          </div>
         </Card>
       )}
 
@@ -608,13 +707,84 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
                     onChange={(e) => setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))}
                   />
                 )}
-                {c.type === "file_contains" && (
+                {(c.type === "file_contains" || c.type === "file_not_contains") && (
                   <input
                     className={`${inputCls} max-w-64 font-mono text-xs`}
-                    placeholder="정규식 (예: ^date,total)"
+                    placeholder={c.type === "file_contains" ? "정규식 (예: ^date,total)" : "금칙어 정규식 (예: 법적\\s*책임)"}
                     value={c.pattern ?? ""}
                     onChange={(e) => setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, pattern: e.target.value } : x)))}
                   />
+                )}
+                {c.type === "file_min_words" && (
+                  <input
+                    className={`${inputCls} max-w-40`}
+                    type="number"
+                    min={1}
+                    placeholder="최소 단어 수 (예: 200)"
+                    value={c.min_count ?? ""}
+                    onChange={(e) =>
+                      setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, min_count: Number(e.target.value) || null } : x)))
+                    }
+                  />
+                )}
+                {c.type === "file_max_words" && (
+                  <input
+                    className={`${inputCls} max-w-40`}
+                    type="number"
+                    min={1}
+                    placeholder="최대 단어 수 (예: 320)"
+                    value={c.max_count ?? ""}
+                    onChange={(e) =>
+                      setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, max_count: Number(e.target.value) || null } : x)))
+                    }
+                  />
+                )}
+                {CSV_CHECKS.includes(c.type) && (
+                  <>
+                    {NEEDS_COLUMN.includes(c.type) && (
+                      <input
+                        className={`${inputCls} max-w-40 font-mono text-xs`}
+                        placeholder="열 이름 (예: revenue)"
+                        value={c.column ?? ""}
+                        onChange={(e) => setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, column: e.target.value } : x)))}
+                      />
+                    )}
+                    <input
+                      className={`${inputCls} max-w-48 font-mono text-xs`}
+                      placeholder={c.type === "csv_cell" ? "행 조건 (예: branch=서울)" : "행 조건 (선택, 예: verdict=반려)"}
+                      value={c.row_match ?? ""}
+                      onChange={(e) => setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, row_match: e.target.value } : x)))}
+                    />
+                    {NEEDS_EXPECTED.includes(c.type) && (
+                      <input
+                        className={`${inputCls} max-w-40 font-mono text-xs`}
+                        placeholder={
+                          c.type === "csv_row_count"
+                            ? "기대 행 수 (예: 8)"
+                            : c.type === "csv_column_sum"
+                              ? "기대 합계 (예: 3000000)"
+                              : "기대값 (예: 480000000)"
+                        }
+                        value={c.expected ?? ""}
+                        onChange={(e) => setChecks((arr) => arr.map((x, j) => (j === i ? { ...x, expected: e.target.value } : x)))}
+                      />
+                    )}
+                    {NEEDS_TOLERANCE.includes(c.type) && (
+                    <input
+                      className={`${inputCls} max-w-28`}
+                      type="number"
+                      min={0}
+                      step="any"
+                      placeholder="허용 오차"
+                      value={c.tolerance ?? ""}
+                      onChange={(e) =>
+                        setChecks((arr) =>
+                          arr.map((x, j) => (j === i ? { ...x, tolerance: e.target.value === "" ? null : Number(e.target.value) } : x)),
+                        )
+                      }
+                    />
+                    )}
+                  </>
                 )}
                 {c.type === "command" && (
                   <>

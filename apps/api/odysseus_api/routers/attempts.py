@@ -174,6 +174,7 @@ async def _attempt_out(attempt: Attempt, db: AsyncSession) -> AttemptOut:
                 points=scenario.points,
                 status=_scenario_status(attempt, scenario.ordinal),
                 agent_enabled=scenario.agent_enabled,
+                desktop_apps=list(scenario.desktop_apps or []),
                 characters=[
                     {
                         "key": c.get("key"),

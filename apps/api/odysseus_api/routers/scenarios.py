@@ -4,6 +4,7 @@
 시나리오를 계속 개선할 수 있다. 실제 응시 흔적이 존재하는 시나리오는 삭제 대신 보관한다.
 """
 
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
+from ..checks import as_number
 from ..db import get_db
 from ..deps import require_admin, require_staff
 from ..models import AssessmentScenario, Execution, MessengerMessage, Scenario, User, WorkspaceFile
@@ -48,10 +50,28 @@ def _validate(body: ScenarioIn) -> None:
     if len(paths) != len(set(paths)):
         raise HTTPException(400, "초기 파일 경로가 중복됩니다")
     for c in body.checks:
-        if c.type in ("file_exists", "file_contains") and not (c.path or "").strip():
+        if c.type != "command" and not (c.path or "").strip():
             raise HTTPException(400, f"체크 '{c.label}': path가 필요합니다")
-        if c.type == "file_contains" and not (c.pattern or "").strip():
-            raise HTTPException(400, f"체크 '{c.label}': pattern이 필요합니다")
+        if c.type in ("file_contains", "file_not_contains"):
+            if not (c.pattern or "").strip():
+                raise HTTPException(400, f"체크 '{c.label}': pattern이 필요합니다")
+            try:
+                re.compile(c.pattern or "")
+            except re.error as exc:
+                raise HTTPException(400, f"체크 '{c.label}': 정규식 오류 — {exc}") from exc
+        if c.type == "file_min_words" and not (c.min_count or 0):
+            raise HTTPException(400, f"체크 '{c.label}': 최소 단어 수(min_count)가 필요합니다")
+        if c.type == "file_max_words" and not (c.max_count or 0):
+            raise HTTPException(400, f"체크 '{c.label}': 최대 단어 수(max_count)가 필요합니다")
+        if c.type in ("csv_cell", "csv_column_sum", "csv_column_unique") and not (c.column or "").strip():
+            raise HTTPException(400, f"체크 '{c.label}': column이 필요합니다")
+        if c.type in ("csv_cell", "csv_row_count", "csv_column_sum"):
+            if c.expected is None or not str(c.expected).strip():
+                raise HTTPException(400, f"체크 '{c.label}': expected(기대값)가 필요합니다")
+        if c.type in ("csv_row_count", "csv_column_sum") and as_number(str(c.expected or "")) is None:
+            raise HTTPException(400, f"체크 '{c.label}': expected는 숫자여야 합니다")
+        if c.type.startswith("csv_") and (c.row_match or "").strip() and "=" not in str(c.row_match):
+            raise HTTPException(400, f"체크 '{c.label}': row_match는 '열이름=값' 형식이어야 합니다")
         if c.type == "command" and not (c.command or "").strip():
             raise HTTPException(400, f"체크 '{c.label}': command가 필요합니다")
 
@@ -69,6 +89,7 @@ def _apply(row: Scenario, body: ScenarioIn) -> None:
     row.checks = [c.model_dump() for c in body.checks]
     row.rubric = body.rubric or default_rubric()
     row.agent_enabled = body.agent_enabled
+    row.desktop_apps = list(body.desktop_apps or [])
 
 
 async def _has_history(scenario_id: uuid.UUID, db: AsyncSession) -> bool:

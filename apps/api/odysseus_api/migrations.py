@@ -92,6 +92,13 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE executions ADD COLUMN IF NOT EXISTS input_files JSONB",
         ),
     ),
+    Migration(
+        6,
+        "per-scenario desktop app set",
+        (
+            "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS desktop_apps JSONB NOT NULL DEFAULT '[]'::jsonb",
+        ),
+    ),
 )
 
 

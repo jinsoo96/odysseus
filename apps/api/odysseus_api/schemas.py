@@ -2,7 +2,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+from .desktop import normalize_desktop_apps
 
 #: 관리자가 직접 부여할 수 있는 역할. guest 는 여기 없다 — 게스트 계정은
 #: 게스트 로그인만이 만든다. 사람을 게스트로 "강등"하는 조작은 의미가 없고,
@@ -113,16 +115,49 @@ class InitialFileIn(BaseModel):
     content: str = Field(default="", max_length=400_000)
 
 
-CheckType = Literal["file_exists", "file_contains", "command"]
+#: 자동 체크 종류.
+#:
+#: 코딩 과제는 "실행해서 통과하는가"로 채점되지만, 사무·문서 과제는 실행할 것이
+#: 없다. 그래서 실행 없이도 결과물을 객관적으로 검증할 수 있는 종류를 함께 둔다 —
+#: 금칙어(file_not_contains), 분량 하한·상한(file_min_words / file_max_words),
+#: 표의 특정 값(csv_cell), 행 수(csv_row_count), 열 합계(csv_column_sum),
+#: 값 중복 없음(csv_column_unique).
+CheckType = Literal[
+    "file_exists",
+    "file_contains",
+    "file_not_contains",
+    "file_min_words",
+    "file_max_words",
+    "csv_cell",
+    "csv_row_count",
+    "csv_column_sum",
+    "csv_column_unique",
+    "command",
+]
 
 
 class CheckIn(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     type: CheckType
-    path: str | None = Field(default=None, max_length=500)  # file_* 용
-    pattern: str | None = Field(default=None, max_length=2000)  # file_contains 정규식
+    path: str | None = Field(default=None, max_length=500)  # file_* / csv_* 용
+    pattern: str | None = Field(default=None, max_length=2000)  # file_contains / file_not_contains 정규식
     command: str | None = Field(default=None, max_length=500)  # command 용
     expected_stdout: str | None = Field(default=None, max_length=8000)  # command 출력 포함 문자열
+    # ── 표(csv_*) 용 ──
+    #: 값을 읽을 열 이름 (헤더 기준). csv_cell / csv_column_sum / csv_column_unique
+    column: str | None = Field(default=None, max_length=200)
+    #: 행을 고르는 조건 "열이름=값". csv_cell 은 첫 일치 행, 나머지는 일치하는 행 전체.
+    row_match: str | None = Field(default=None, max_length=400)
+    #: 기대값. csv_cell(칸 값) / csv_row_count(행 수) / csv_column_sum(합계).
+    #: 숫자면 수치로, 아니면 공백을 무시한 문자열로 비교한다.
+    expected: str | None = Field(default=None, max_length=500)
+    #: 숫자 비교 허용 오차 (기본 0 — 정확히 일치)
+    tolerance: float | None = Field(default=None, ge=0)
+    # ── 분량 용 ──
+    #: 최소 단어 수 (file_min_words)
+    min_count: int | None = Field(default=None, ge=1, le=100000)
+    #: 최대 단어 수 (file_max_words) — 짧게 쓰는 것이 요구사항인 산출물용
+    max_count: int | None = Field(default=None, ge=1, le=100000)
     points: int = Field(default=10, ge=0, le=100)
 
 
@@ -140,6 +175,13 @@ class ScenarioIn(BaseModel):
     checks: list[CheckIn] = Field(default_factory=list, max_length=30)
     rubric: dict = Field(default_factory=dict)
     agent_enabled: bool = True
+    #: 이 시나리오에서 제공할 데스크톱 앱. 비어 있으면 전부 제공(기존 동작).
+    desktop_apps: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("desktop_apps")
+    @classmethod
+    def _clean_desktop_apps(cls, value: list[str]) -> list[str]:
+        return normalize_desktop_apps(value)
 
 
 class ScenarioSummary(BaseModel):
@@ -168,6 +210,7 @@ class ScenarioOut(BaseModel):
     checks: list
     rubric: dict
     agent_enabled: bool
+    desktop_apps: list = []
     is_archived: bool
     created_at: datetime
     updated_at: datetime
@@ -258,6 +301,8 @@ class AttemptScenarioOut(BaseModel):
     ordinal: int
     points: int
     agent_enabled: bool
+    #: 이 문제에서 열 수 있는 앱 — 비어 있으면 전부 (desktop.OPTIONAL_APPS)
+    desktop_apps: list[str] = []
     characters: list  # [{key, name, role, color}] — persona/knowledge는 제외
     # 순차 진행 상태: completed(제출 완료) | in_progress(현재) | locked(아직 잠김)
     status: str = "in_progress"

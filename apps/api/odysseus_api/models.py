@@ -99,8 +99,12 @@ class Scenario(Base):
     initial_files: [{path, content}] — 워크스페이스 초기 상태
     objectives_md: 숨은 진짜 요구사항(정답 정의). NPC 컨텍스트·자동평가에만 쓰이고
                    응시자에게 절대 노출되지 않는다.
-    checks: [{label, type: file_exists|file_contains|command, path?, pattern?, command?,
-              expected_stdout?, points}] — 결과물 자동 검증
+    checks: [{label, type, path?, pattern?, command?, expected_stdout?, column?, row_match?,
+              expected?, tolerance?, min_count?, max_count?, points}] — 결과물 자동 검증.
+             type: file_exists | file_contains | file_not_contains | file_min_words |
+                   file_max_words | csv_cell | csv_row_count | csv_column_sum |
+                   csv_column_unique | command
+    desktop_apps: 이 시나리오에서 제공할 앱 목록 (빈 목록 = 전부)
     rubric: {process_weight, result_weight, process: [{name, points, desc}], result: [...]}
     """
 
@@ -120,6 +124,9 @@ class Scenario(Base):
     checks: Mapped[list] = mapped_column(JSONB, default=list)
     rubric: Mapped[dict] = mapped_column(JSONB, default=dict)
     agent_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 이 시나리오에서 제공할 데스크톱 앱(desktop.OPTIONAL_APPS 의 부분집합).
+    # 비어 있으면 전부 제공한다 — 기존 시나리오는 아무것도 바뀌지 않는다.
+    desktop_apps: Mapped[list] = mapped_column(JSONB, default=list)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
