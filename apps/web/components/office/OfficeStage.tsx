@@ -265,9 +265,6 @@ export function OfficeStage({
                   background: L.room.floor,
                 }}
               />
-              <div className="o-decal" style={rect(L.decal)}>
-                {r.label}
-              </div>
               <div className="o-threshold" style={rect(thresholdOf(L.room))} />
             </div>
           );
@@ -363,7 +360,12 @@ export function OfficeStage({
              월드 안에 글자를 두면 층 배율만큼 작아져 읽을 수 없다. */}
       <div
         className="office-labels"
-        style={{ transform: camera, ["--cam-scale" as string]: String(scale) }}
+        style={{
+          width: floor.world.width,
+          height: floor.world.height,
+          transform: camera,
+          ["--cam-scale" as string]: String(scale),
+        }}
         aria-hidden="true"
       >
         {floor.rooms.map((r) => {

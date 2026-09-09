@@ -491,16 +491,6 @@ body {
     repeating-conic-gradient(rgba(255, 255, 255, 0.018) 0% 25%, transparent 0% 50%);
 }
 
-/* 바닥에 눕힌 부서 이름 — 층에서 유일하게 허용되는 월드 글자 */
-.o-decal {
-  @apply absolute flex items-center justify-center whitespace-nowrap;
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: 0.28em;
-  color: var(--accent);
-  opacity: 0.12;
-}
-
 /* 문턱 — 문 사이 바닥의 색 띠. 채도를 쓰는 다섯 곳 중 하나. */
 .o-threshold {
   position: absolute;
@@ -584,10 +574,10 @@ body {
 /* ── 글자 레이어 — 카메라는 타되 배율은 되돌린다 ────────── */
 /* `.office-world` 는 transform 을 갖고 있어 그 안에 넣으면 글자가 층 배율만큼
    작아진다. 그래서 형제로 두고 배율만 역산한다. */
+/* 크기는 층에서 인라인으로 받는다. 여기에 숫자를 박아 두면 부서 수가 달라져 월드가
+   좁아졌을 때 글자 레이어만 옛 크기로 남아, 문패가 방에서 통째로 밀린다. */
 .office-labels {
   @apply pointer-events-none absolute left-1/2 top-1/2;
-  width: 1280px;
-  height: 800px;
   z-index: 60;
   transform-origin: center;
   transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);

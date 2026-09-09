@@ -256,8 +256,6 @@ export interface RoomLayout {
   props: PlacedProp[];
   /** 벽에 거는 화이트보드 (바닥 칸을 쓰지 않는다) */
   board: { x: number; y: number; w: number; h: number };
-  /** 바닥에 눕히는 부서 이름 */
-  decal: { x: number; y: number; w: number; h: number };
   grid: Uint8Array;
 }
 
@@ -453,7 +451,6 @@ export function layoutRoom(room: Room, assignmentCount: number): RoomLayout {
     overflow: Math.max(0, assignmentCount - DESK_CAPACITY),
     props,
     board,
-    decal: { x: inner.x, y: inner.y + backRow * TILE, w: INNER_COLS * TILE, h: TILE },
     grid,
   };
 }
