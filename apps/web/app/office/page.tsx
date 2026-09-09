@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
@@ -38,6 +38,8 @@ export default function OfficePage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [spatial, setSpatial] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  // 좁아서 목록으로 되돌린 적이 있으면, 그 창에서는 다시 층으로 튀어 오르지 않는다.
+  const narrowedRef = useRef(false);
   const { toast } = useToast();
   const router = useRouter();
 
@@ -54,7 +56,17 @@ export default function OfficePage() {
       .catch((e) => setError(String(e.message)));
   }, [user]);
 
+  /** 자리를 누를 수 없을 만큼 화면이 좁으면 층을 고집하지 않는다.
+   *  채용 화면에서 공간 연출이 응시를 막는 일은 없어야 한다. */
+  const handleTooNarrow = useCallback(() => {
+    if (narrowedRef.current) return;
+    narrowedRef.current = true;
+    setSpatial(false);
+    setAnnouncement("화면이 좁아 목록 화면으로 보여 줍니다.");
+  }, []);
+
   const chooseView = (next: boolean) => {
+    if (next) narrowedRef.current = false;
     setSpatial(next);
     try {
       localStorage.setItem(VIEW_KEY, next ? "floor" : "list");
@@ -158,6 +170,7 @@ export default function OfficePage() {
             busyId={busyId}
             onStart={start}
             onAnnounce={setAnnouncement}
+            onTooNarrow={handleTooNarrow}
           />
         )}
       </main>

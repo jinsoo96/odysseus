@@ -214,14 +214,11 @@ body {
 }
 
 
-/* ── 사무실 (부서별 섹터) ───────────────────────────────── */
-/*
-   여기 있는 것은 전부 DOM 이다. 캔버스도, 타일맵도, 게임 엔진도 쓰지 않는다.
-   방 여덟 개와 책상 스무 개 남짓은 브라우저가 이미 잘 그리는 규모이고, 무엇보다
-   방이 `<section>` 이고 책상이 `<button>` 이어야 목록 화면과 **같은 트리**를 쓸 수
-   있다. 트리가 하나면 두 화면이 서로 어긋날 방법이 없다.
-*/
 
+
+/* ── 사무실 · 페이지 뼈대와 목록 모드 ─────────────────── */
+/* 공간 모드가 어떻게 바뀌든 이쪽은 그대로다. 목록으로 응시하는 사람이
+   조용히 뒤처지는 일은 없어야 한다. */
 .office-page {
   @apply flex min-h-screen flex-col text-slate-200;
   background:
@@ -229,23 +226,18 @@ body {
     radial-gradient(820px 460px at 6% 108%, rgba(129, 140, 248, 0.14), transparent 58%),
     linear-gradient(168deg, #080d1a 0%, #0d1526 58%, #080c18 100%);
 }
-
-/* 첫 Tab 에 잡히는 건너뛰기 링크 — 공간 화면을 통째로 넘어간다 */
 .office-skip {
   @apply absolute left-3 top-3 z-50 -translate-y-20 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition;
 }
 .office-skip:focus {
   @apply translate-y-0;
 }
-
 .office-header {
   @apply flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-white/10 px-4 py-3 sm:px-5;
 }
-
 .office-linkbtn {
   @apply rounded-lg border border-white/15 px-3 py-2 text-sm font-medium text-slate-300 transition hover:border-white/30 hover:text-white;
 }
-
 .office-viewtoggle {
   @apply flex rounded-lg border border-white/15 p-0.5;
 }
@@ -259,7 +251,6 @@ body {
 .office-viewtoggle button.is-on {
   @apply bg-sky-500/20 text-sky-200;
 }
-
 .office-main {
   @apply min-h-0 flex-1 px-5 py-4;
 }
@@ -269,72 +260,21 @@ body {
 .office-empty {
   @apply mx-auto max-w-xl rounded-2xl border border-white/10 bg-white/5 px-6 py-10 text-center text-sm text-slate-400;
 }
-
 .office-footer {
   @apply shrink-0 border-t border-white/10 px-5 py-3 text-[11px] leading-relaxed text-slate-500;
 }
 .office-footer b {
   @apply text-slate-300;
 }
-
-/* ── 층 (공간 모드) ───────────────────────────────────── */
-
-.office-viewport {
-  @apply relative h-[calc(100vh-13rem)] min-h-[420px] w-full overflow-hidden rounded-2xl border border-white/10;
-  background:
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 40px),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 40px),
-    #060a14;
-}
-
-/* 카메라 — 층 전체를 하나의 transform 으로 민다 */
-.office-world {
-  @apply absolute left-1/2 top-1/2;
-  transform-origin: center;
-  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.office-corridor {
-  @apply absolute rounded-xl;
-  background: linear-gradient(180deg, #131c30 0%, #16203a 50%, #131c30 100%);
-  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.12);
-}
-
-.office-elevator {
-  @apply absolute flex h-20 w-24 flex-col items-center justify-center rounded-lg border border-slate-600/60 text-slate-400;
-  background: linear-gradient(180deg, #1e293b, #131b2c);
-}
-.office-elevator span {
-  @apply text-sm tracking-widest;
-}
-.office-elevator em {
-  @apply mt-1 not-italic text-[10px];
-}
-
-/* ── 방 ──────────────────────────────────────────────── */
-
 .office-sector {
   @apply overflow-hidden rounded-xl border;
   transition:
     box-shadow 300ms ease,
     border-color 300ms ease;
 }
-
-.office-door {
-  @apply absolute left-1/2 h-1.5 w-[76px] -translate-x-1/2 rounded-full opacity-80;
-}
-.office-door-north {
-  bottom: -3px;
-}
-.office-door-south {
-  top: -3px;
-}
-
 .office-sector-head {
   @apply relative z-10 flex items-center gap-2 px-3 pt-2.5;
 }
-/* 공간 모드에서는 방 이름과 설명도 클릭을 흘려보낸다 — 방 어디를 눌러도 들어가지는데
-   글자 위만 안 눌리면 그게 더 이상하다. 목록 모드에서는 그대로 둔다(글자 선택). */
 .office-sector.absolute .office-sector-head,
 .office-sector.absolute .office-sector-summary,
 .office-sector.absolute .office-sector-empty {
@@ -355,49 +295,16 @@ body {
 .office-sector-empty {
   @apply relative z-10 px-3 pt-3 text-[11px] text-slate-500;
 }
-
-/* 소품 — 분위기용. 이모지는 OS 마다 다르게 그려지므로 의미를 싣지 않는다. */
-.office-prop {
-  @apply pointer-events-none absolute text-xl opacity-40;
-}
-.office-bystander {
-  @apply pointer-events-none absolute opacity-50;
-}
-
-/* 방 전체를 누르면 들어간다. 책상보다 아래에 깔려 클릭을 가로채지 않는다. */
-.office-sector-enter {
-  @apply absolute inset-0 z-0 flex cursor-pointer items-end justify-center pb-3;
-}
-.office-sector-enter-hint {
-  @apply rounded-full border border-white/15 bg-black/40 px-2.5 py-1 text-[10px] font-semibold text-slate-300 opacity-0 transition;
-}
-.office-sector-enter:hover .office-sector-enter-hint,
-.office-sector-enter:focus-visible .office-sector-enter-hint {
-  @apply opacity-100;
-}
-
-/* ── 책상 ────────────────────────────────────────────── */
-
-/* 자리 목록은 방 전체를 덮는 투명한 상자다. 그대로 두면 이 상자가 방바닥 클릭을
-   전부 삼켜, 뒤에 깔린 '들어가기'와 방 이름이 영영 눌리지 않는다. 상자는 클릭을
-   흘려보내고 자리만 받는다. */
-.office-desk-slots {
-  @apply pointer-events-none absolute inset-0 z-10 m-0 list-none p-0;
-}
 .office-desk-slots .office-desk {
   @apply pointer-events-auto;
 }
 .office-desk-list {
   @apply m-0 grid list-none gap-2 p-0 pt-3 sm:grid-cols-2;
 }
-
-/* 어두운 바탕 위의 보조 버튼 — 공용 `ghost` 는 밝은 화면용(text-slate-600)이라
-   여기서는 글자가 배경에 묻는다. */
 .office-ghostbtn {
   @apply rounded-lg px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-white/10 hover:text-white;
   min-height: 40px;
 }
-
 .office-desk {
   @apply flex flex-col overflow-hidden rounded-lg border border-white/15 bg-slate-900/85 px-2 py-1.5 text-left transition;
   min-height: 44px;
@@ -413,27 +320,9 @@ body {
 .office-desk:disabled {
   @apply cursor-default opacity-55;
 }
-.office-desk-resume {
-  @apply border-amber-300/50;
-}
-.office-desk-done {
-  @apply border-white/10;
-}
-
-/* 책상 상판 — 모니터와 의자. 목록 모드에서는 자리를 낭비하므로 감춘다. */
-.office-desk-top {
-  @apply relative mb-1 hidden h-3 w-full;
-}
 .office-desk.absolute .office-desk-top {
   @apply block;
 }
-.office-desk-monitor {
-  @apply absolute left-1/2 top-0 h-2 w-8 -translate-x-1/2 rounded-sm bg-slate-500/70;
-}
-.office-desk-chair {
-  @apply absolute bottom-0 left-1/2 h-1.5 w-4 -translate-x-1/2 rounded-full bg-slate-600/60;
-}
-
 .office-desk-body {
   @apply flex min-w-0 flex-1 flex-col;
 }
@@ -464,27 +353,6 @@ body {
 .office-desk-state-done {
   @apply bg-white/10 text-slate-400;
 }
-
-/* ── 아바타 ──────────────────────────────────────────── */
-
-.office-avatar {
-  @apply pointer-events-none absolute z-20;
-}
-
-.office-leave {
-  @apply absolute bottom-3 left-1/2 z-30 -translate-x-1/2 rounded-full border border-white/20 bg-slate-900/90 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-sky-300/60 hover:text-white;
-}
-.office-leave kbd {
-  @apply ml-1 rounded border border-white/20 px-1 text-[10px] text-slate-400;
-}
-
-.office-lobby-tray {
-  @apply absolute bottom-3 right-3 z-30 max-h-[42%] w-72 overflow-y-auto rounded-xl border border-white/15 bg-slate-950/90 p-2 backdrop-blur;
-}
-
-/* ── 목록 모드 ───────────────────────────────────────── */
-/* 같은 컴포넌트, 같은 핸들러. 좌표만 떨어져 나간다. */
-
 .office-list {
   @apply mx-auto grid max-w-5xl gap-3 lg:grid-cols-2;
 }
@@ -494,14 +362,349 @@ body {
 .office-sector-lobby {
   @apply border-slate-500/40 bg-white/[0.04] pb-3;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .office-world {
-    transition: none;
-  }
-  .office-sector,
+.office-sector,
   .office-desk,
   .office-sector-enter-hint {
     transition: none;
   }
+
+/* ── 사무실 ─────────────────────────────────────────────── */
+/*
+   층 전체가 DOM 이다. 캔버스도 타일맵도 게임 엔진도 쓰지 않는다. 방 여덟 개와 자리
+   스물 남짓은 브라우저가 이미 잘 그리는 규모이고, 무엇보다 방이 `<section>` 이고
+   자리가 `<button>` 이어야 목록 화면과 **같은 트리**를 쓸 수 있다.
+
+   그리는 법은 한 문장으로 요약된다: **바닥은 정사각으로 두고, 수직면만 윗면과 어두운
+   앞면으로 세운다.** 빛은 화면 위에서 하나만 온다. 아이소메트릭으로 기울이지 않는
+   이유는 `floorplan.ts` 머리에 적어 두었다.
+*/
+
+/* 여기서 정의하는 색은 전부 `.office-viewport` 안에서만 산다. 머리글·토글·목록은
+   앱의 기존 slate/sky 를 그대로 쓴다. 그 경계가 의도다 — 뷰포트는 다른 재질의
+   세계를 들여다보는 창이지, 앱을 다시 칠한 것이 아니다. */
+.office-viewport {
+  --o-void: #04060c;
+  --o-wall-side: #0e1626;
+  --o-wall-top: #1b2638;
+  --o-wall-rim: #4a5c81;
+  --o-corridor: #1a2438;
+  --o-contact: rgba(2, 6, 23, 0.45);
+  --o-lip: rgba(255, 255, 255, 0.14);
+  --o-text: #dce6f7;
+  --o-text-2: #93a4c0;
+  --o-state-open: #7fd4ff;
+  --o-state-resume: #e8b96a;
+  --o-state-done: #4a5670;
+
+  @apply relative h-[calc(100vh-13rem)] min-h-[420px] w-full overflow-hidden rounded-2xl;
+  background: var(--o-void);
+}
+
+/* 카메라 — 층 전체를 하나의 transform 으로 민다. 레이어가 여러 장인 이유는 z 때문이다:
+   방이 자기 안에 벽을 들고 있으면 그 벽은 형제인 아바타 위로 절대 못 올라온다.
+
+   월드 안의 그려지는 것은 **전부 스스로 absolute 여야 한다.** 부모에게서 물려받는
+   식으로 두면 방마다 감싸는 div 하나만 끼어들어도 전부 흐름으로 흘러내려 한자리에
+   쌓인다(실제로 그랬다). 그래서 아래 클래스마다 position 을 직접 박아 둔다. */
+.office-world {
+  @apply pointer-events-none absolute left-1/2 top-1/2;
+  transform-origin: center;
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.office-world > * {
+  @apply absolute;
+}
+.office-layer-base { z-index: 0; }
+.office-layer-floor { z-index: 10; }
+.office-layer-back { z-index: 20; }
+.office-layer-props { z-index: 30; }
+.office-layer-zones { z-index: 30; @apply pointer-events-auto; }
+.office-layer-actor { z-index: 40; }
+.office-layer-front { z-index: 50; }
+
+/* ── 복도 ─────────────────────────────────────────────── */
+/* 복도는 딱딱한 바닥재다 — 천장등 웅덩이가 차갑게 떨어지고 광택이 한 줄 지난다.
+   방은 카펫이라 광택이 없다. 문턱에서 재질과 색온도가 함께 바뀌는 것이,
+   애니메이션 없이 "들어왔다"를 만든다. */
+.office-corridor {
+  position: absolute;
+  background:
+    radial-gradient(ellipse 150px 70px at 64px 50%, rgba(186, 214, 255, 0.13), transparent 72%),
+    radial-gradient(ellipse 150px 70px at 288px 50%, rgba(186, 214, 255, 0.13), transparent 72%),
+    radial-gradient(ellipse 150px 70px at 512px 50%, rgba(186, 214, 255, 0.13), transparent 72%),
+    radial-gradient(ellipse 150px 70px at 736px 50%, rgba(186, 214, 255, 0.13), transparent 72%),
+    radial-gradient(ellipse 150px 70px at 960px 50%, rgba(186, 214, 255, 0.13), transparent 72%),
+    linear-gradient(100deg, transparent 30%, rgba(190, 214, 255, 0.05) 46%, transparent 62%),
+    repeating-linear-gradient(90deg, rgba(148, 171, 214, 0.055) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(0deg, rgba(148, 171, 214, 0.055) 0 1px, transparent 1px 64px),
+    var(--o-corridor);
+}
+
+.o-elevator {
+  position: absolute;
+  background: linear-gradient(180deg, #1c2436, #10182a);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+}
+.o-elevator-leaf {
+  @apply absolute top-1;
+  width: 44px;
+  height: 88px;
+  background: linear-gradient(180deg, #2a3448, #1b2334);
+  box-shadow: inset 0 1px 0 var(--o-lip);
+}
+.o-elevator-leaf:first-of-type { left: 2px; }
+.o-elevator-leaf:nth-of-type(2) { left: 50px; }
+.o-elevator-call {
+  @apply absolute rounded-full;
+  right: -6px;
+  top: 42px;
+  width: 5px;
+  height: 5px;
+  background: #7fd4ff;
+  opacity: 0.7;
+}
+
+/* 복도 동쪽 끝의 창 — 복도에 끝이 있다는 감각 */
+.o-window {
+  position: absolute;
+  background: linear-gradient(90deg, rgba(186, 214, 255, 0.22), rgba(186, 214, 255, 0.06));
+  box-shadow: -18px 0 34px -10px rgba(186, 214, 255, 0.18);
+}
+
+/* ── 방 바닥 ──────────────────────────────────────────── */
+.o-floor {
+  position: absolute;
+  background-image:
+    radial-gradient(ellipse 180px 120px at 50% 42%, rgba(255, 238, 208, 0.07), transparent 72%),
+    repeating-conic-gradient(rgba(255, 255, 255, 0.015) 0% 25%, transparent 0% 50%);
+  background-size: auto, 64px 64px;
+  box-shadow: inset 0 0 20px -10px rgba(3, 5, 12, 0.75);
+}
+.o-floor::after {
+  content: "";
+  @apply absolute inset-0;
+  background: radial-gradient(120% 120% at 50% 45%, transparent 62%, rgba(4, 7, 14, 0.34) 100%);
+}
+.o-floor[data-entered] {
+  background-image:
+    radial-gradient(ellipse 180px 120px at 50% 42%, rgba(255, 238, 208, 0.12), transparent 72%),
+    repeating-conic-gradient(rgba(255, 255, 255, 0.018) 0% 25%, transparent 0% 50%);
+}
+
+/* 바닥에 눕힌 부서 이름 — 층에서 유일하게 허용되는 월드 글자 */
+.o-decal {
+  @apply absolute flex items-center justify-center whitespace-nowrap;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.28em;
+  color: var(--accent);
+  opacity: 0.12;
+}
+
+/* 문턱 — 문 사이 바닥의 색 띠. 채도를 쓰는 다섯 곳 중 하나. */
+.o-threshold {
+  position: absolute;
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+/* ── 벽 ───────────────────────────────────────────────── */
+/* 모서리는 계산해서 나온다. 반경 0 — 건축물에는 둥근 모서리가 없다. */
+.o-wall {
+  position: absolute;
+  background: var(--o-wall-top);
+  box-shadow: 0 6px 10px -2px rgba(3, 5, 12, 0.75);
+}
+.o-wall::before {
+  content: "";
+  @apply absolute left-0 right-0 top-0;
+  height: 1.5px;
+  background: var(--o-wall-rim);
+  opacity: 0.65;
+}
+/* 남쪽을 보는 면만 서 있다. 이 한 겹이 벽의 두께다. */
+.o-wall-face {
+  @apply absolute left-0 right-0;
+  top: 100%;
+  height: 12px;
+  background: var(--o-wall-side);
+}
+.o-wall-face::after {
+  content: "";
+  @apply absolute left-0 right-0 top-0;
+  height: 1px;
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.o-board { @apply absolute; }
+.o-prop { @apply pointer-events-none absolute; }
+
+/* ── 방 영역 (투명한 상호작용 층) ─────────────────────── */
+.o-zone { @apply pointer-events-none; }
+.o-zone-slots { @apply pointer-events-none absolute inset-0 z-10 m-0 list-none p-0; }
+.o-zone-enter { @apply pointer-events-auto absolute inset-0 z-0 cursor-pointer; }
+
+/* ── 자리 ─────────────────────────────────────────────── */
+.office-desk-art {
+  @apply pointer-events-auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  line-height: 0;
+  transition: transform 140ms ease, filter 140ms ease;
+}
+.office-desk-art:hover:not(:disabled) { transform: translateY(-2px); filter: brightness(1.12); }
+.office-desk-art:focus-visible {
+  outline: 2px solid var(--o-state-open);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.office-desk-art:disabled { cursor: default; filter: saturate(0.7) brightness(0.88); }
+
+/* 상태는 가구가 말한다 — 화면 불빛과 의자 위치. 흑백으로 봐도 구분된다. */
+.o-screen { fill: var(--o-state-done); fill-opacity: 0.3; }
+[data-state="open"] .o-screen {
+  fill: var(--o-state-open);
+  fill-opacity: 0.2;
+  filter: drop-shadow(0 0 5px rgba(127, 212, 255, 0.55));
+}
+[data-state="resume"] .o-screen {
+  fill: var(--o-state-resume);
+  fill-opacity: 0.18;
+  filter: drop-shadow(0 0 5px rgba(232, 185, 106, 0.5));
+  animation: o-screen-pulse 2.4s ease-in-out infinite;
+}
+@keyframes o-screen-pulse {
+  0%, 100% { fill-opacity: 0.16; }
+  50% { fill-opacity: 0.3; }
+}
+.o-chair { transform: translateY(-6px); transition: transform 160ms ease; }
+[data-state="resume"] .o-chair { transform: translateY(4px) rotate(-9deg); transform-origin: 50% 60%; }
+
+/* ── 글자 레이어 — 카메라는 타되 배율은 되돌린다 ────────── */
+/* `.office-world` 는 transform 을 갖고 있어 그 안에 넣으면 글자가 층 배율만큼
+   작아진다. 그래서 형제로 두고 배율만 역산한다. */
+.office-labels {
+  @apply pointer-events-none absolute left-1/2 top-1/2;
+  width: 1280px;
+  height: 800px;
+  z-index: 60;
+  transform-origin: center;
+  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.office-labels > * {
+  @apply absolute;
+  transform: translate(-50%, -100%) scale(calc(1 / var(--cam-scale)));
+  transform-origin: bottom center;
+}
+
+/* 문패 — 복도에서 방을 알아보는 유일한 수단 */
+.office-sign {
+  @apply inline-flex items-center gap-1.5 whitespace-nowrap;
+  max-width: 150px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  background: #0e1420;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 0 rgba(2, 6, 23, 0.6), 0 0 18px -4px var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--o-text);
+}
+.office-sign[data-entered] { border-color: var(--accent); }
+.office-sign-chip { width: 6px; height: 12px; border-radius: 1px; background: var(--accent); }
+.office-sign-count { font-size: 10px; font-weight: 600; color: var(--o-text-2); }
+
+/* 이름표 — 한 번에 하나만. 자리마다 붙이면 그건 다시 카드 격자다. */
+.office-plate {
+  @apply block;
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: #0b111c;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 24px -8px rgba(0, 0, 0, 0.8);
+}
+.office-plate-title {
+  @apply block truncate;
+  font-size: 13px;
+  font-weight: 700;
+  color: #e8effb;
+}
+.office-plate-meta { @apply block; font-size: 11px; color: var(--o-text-2); }
+
+/* ── 화면에 붙는 것들 ─────────────────────────────────── */
+.office-breadcrumb {
+  @apply absolute left-3 top-3 z-[70] flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-semibold;
+  background: rgba(8, 12, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #93a4c0;
+}
+.office-breadcrumb-sep { color: #475569; }
+.office-breadcrumb-here { color: #dce6f7; }
+.office-breadcrumb-out {
+  @apply ml-1 rounded-md px-2 py-1 text-[11px] font-semibold transition;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #93a4c0;
+}
+.office-breadcrumb-out:hover { color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.office-breadcrumb-out kbd {
+  @apply ml-1 rounded border px-1 text-[10px];
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #64748b;
+}
+
+/* 하단 바 — 시나리오 수·제한시간·행동이 사는 곳. 월드가 아니라 화면에 붙는다. */
+.office-bar {
+  @apply absolute inset-x-0 bottom-0 z-[70] flex items-center gap-3 px-3.5;
+  height: 72px;
+  background: linear-gradient(180deg, rgba(8, 12, 22, 0), rgba(8, 12, 22, 0.88) 34%, rgba(8, 12, 22, 0.96));
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.office-legend {
+  @apply hidden shrink-0 items-center gap-3 text-[11px] md:flex;
+  color: #93a4c0;
+}
+.office-legend span { @apply inline-flex items-center gap-1.5; }
+.office-legend-dot { @apply inline-block h-2.5 w-2.5 rounded-sm; }
+.office-legend-dot[data-state="open"] { background: #7fd4ff; }
+.office-legend-dot[data-state="resume"] { background: #e8b96a; }
+.office-legend-dot[data-state="done"] { background: #4a5670; }
+
+.office-bar-detail { @apply min-w-0 flex-1 leading-tight; }
+.office-bar-detail b { @apply block truncate text-sm font-bold; color: #dce6f7; }
+.office-bar-detail span { @apply block truncate text-xs; color: #93a4c0; }
+
+.office-bar-action {
+  @apply shrink-0 rounded-lg px-4 py-2.5 text-sm font-bold transition;
+  background: rgba(127, 212, 255, 0.16);
+  border: 1px solid rgba(127, 212, 255, 0.4);
+  color: #cdeeff;
+}
+.office-bar-action:hover:not(:disabled) { background: rgba(127, 212, 255, 0.26); color: #fff; }
+.office-bar-action:disabled { @apply cursor-not-allowed opacity-60; }
+.office-bar-action kbd {
+  @apply ml-1.5 rounded border px-1 text-[10px] font-semibold;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #93a4c0;
+}
+
+.office-avatar { @apply absolute; }
+
+.office-lobby-tray {
+  @apply absolute right-3 z-[70] max-h-[38%] w-72 overflow-y-auto rounded-xl border border-white/15 p-2 backdrop-blur;
+  bottom: 84px;
+  background: rgba(4, 6, 12, 0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-world,
+  .office-labels,
+  .office-desk-art,
+  .o-chair {
+    transition: none;
+  }
+  .o-screen { animation: none; fill-opacity: 0.26; }
+  .office-desk-art:hover:not(:disabled) { transform: none; filter: brightness(1.12); }
 }
