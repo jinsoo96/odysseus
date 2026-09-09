@@ -99,7 +99,16 @@ function langOf(path: string): string {
 }
 
 /** 시나리오 스튜디오 — '문제 상황' 전체(인물·정보 분포·초기 상태·정답 기준)를 설계하는 편집기. */
-export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; scenarioId?: string }) {
+export function ScenarioStudio({
+  initial,
+  scenarioId,
+  initialDepartment = "",
+}: {
+  initial?: Scenario;
+  scenarioId?: string;
+  /** 부서 관리 화면에서 「새 미션」으로 넘어왔을 때 미리 골라져 있는 방 */
+  initialDepartment?: string;
+}) {
   const router = useRouter();
   const { toast, confirm } = useToast();
   const [tab, setTab] = useState<TabKey>("basic");
@@ -108,7 +117,7 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
   const [title, setTitle] = useState(initial?.title ?? "");
   const [summary, setSummary] = useState(initial?.summary ?? "");
   const [difficulty, setDifficulty] = useState(initial?.difficulty ?? "medium");
-  const [department, setDepartment] = useState(initial?.department ?? "");
+  const [department, setDepartment] = useState(initial?.department ?? initialDepartment);
   // 부서는 관리자가 만드는 데이터라 코드가 목록을 알지 못한다 — 서버에서 받아 온다.
   const [departments, setDepartments] = useState<Department[]>([]);
   useEffect(() => {

@@ -17,6 +17,7 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..checks import as_number
 from ..db import get_db
+from ..departments import normalize_slug
 from ..deps import require_admin, require_staff
 from ..models import AssessmentScenario, Execution, MessengerMessage, Scenario, User, WorkspaceFile
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
@@ -178,6 +179,48 @@ async def author_chat(body: AuthorChatIn, db: AsyncSession = Depends(get_db), _=
             yield f"data: {_json.dumps({'error': info['message'], 'code': info['code'], 'correlation_id': info['correlation_id']}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+class DepartmentMoveIn(BaseModel):
+    #: 옮길 부서의 키. 빈 문자열이면 로비(미배치)로 내린다.
+    department: str = Field(default="", max_length=40)
+
+
+@router.put("/{scenario_id}/department", response_model=ScenarioSummary)
+async def move_scenario(
+    scenario_id: uuid.UUID,
+    body: DepartmentMoveIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_admin),
+):
+    """시나리오를 다른 방으로 옮긴다 — 부서만 바꾸고 나머지는 건드리지 않는다.
+
+    전체 저장(`PUT /scenarios/{id}`)으로도 같은 일을 할 수 있지만, 그건 시나리오
+    한 벌을 통째로 덮어쓰는 요청이다. 사무실을 재편성하려고 스물다섯 개를 옮기는데
+    그때마다 인물과 초기 파일과 채점 기준을 왕복시킬 이유가 없다. 실수로 무언가를
+    지울 여지도 그만큼 생긴다.
+
+    진행 중인 응시에는 영향이 없다. 부서는 문제의 내용이 아니라 길찾기 정보라
+    응시 시작 시 고정되는 스냅샷에 들어 있지 않다.
+    """
+    row = await db.get(Scenario, scenario_id)
+    if not row:
+        raise HTTPException(404, "시나리오를 찾을 수 없습니다")
+    row.department = normalize_slug(body.department)
+    await db.commit()
+    await db.refresh(row)
+    return ScenarioSummary(
+        id=row.id,
+        title=row.title,
+        summary=row.summary,
+        difficulty=row.difficulty,
+        character_count=len(row.characters or []),
+        check_count=len(row.checks or []),
+        agent_enabled=row.agent_enabled,
+        department=row.department or "",
+        is_archived=row.is_archived,
+        updated_at=row.updated_at,
+    )
 
 
 @router.get("/rubric-default")

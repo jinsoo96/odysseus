@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { api, ApiError } from "@/lib/api";
-import type { Department } from "@/lib/types";
+import type { Department, ScenarioSummary } from "@/lib/types";
+import { DIFFICULTY_LABEL } from "@/lib/format";
 import { useUser } from "@/components/useUser";
 import { Shell } from "@/components/Shell";
 import { IconDelete } from "@/components/icons";
@@ -36,15 +38,18 @@ const EMPTY = { slug: "", label: "", summary: "", accent: ACCENTS[0], app_preset
 export default function DepartmentsPage() {
   const { user, loading } = useUser(["admin"]);
   const [rows, setRows] = useState<Department[] | null>(null);
+  const [scenarios, setScenarios] = useState<ScenarioSummary[] | null>(null);
   const [draft, setDraft] = useState<typeof EMPTY & { id?: string }>({ ...EMPTY });
   const [busy, setBusy] = useState(false);
   const { toast, confirm } = useToast();
 
   const load = useCallback(
     () =>
-      api
-        .get<Department[]>("/departments")
-        .then(setRows)
+      Promise.all([api.get<Department[]>("/departments"), api.get<ScenarioSummary[]>("/scenarios")])
+        .then(([depts, scen]) => {
+          setRows(depts);
+          setScenarios(scen);
+        })
         .catch((e) => toast(String(e.message), "error")),
     [toast],
   );
@@ -94,6 +99,23 @@ export default function DepartmentsPage() {
     }
   };
 
+  /** 미션을 다른 방으로 옮긴다.
+   *
+   *  부서만 바꾸는 전용 요청을 쓴다 — 전체 저장으로 옮기면 스물다섯 번 왕복하는 동안
+   *  인물과 초기 파일과 채점 기준을 매번 덮어쓰게 되고, 그만큼 잃을 여지가 생긴다. */
+  const moveScenario = async (s: ScenarioSummary, department: string) => {
+    setScenarios((prev) =>
+      (prev ?? []).map((x) => (x.id === s.id ? { ...x, department } : x)),
+    );
+    try {
+      await api.put(`/scenarios/${s.id}/department`, { department });
+      await load();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : "옮길 수 없습니다", "error");
+      await load();
+    }
+  };
+
   /** 순서가 곧 평면도의 배치다. 위 줄 왼쪽부터 채워지고 절반이 넘어가면 아래 줄로 내려간다. */
   const move = async (index: number, delta: number) => {
     if (!rows) return;
@@ -113,6 +135,9 @@ export default function DepartmentsPage() {
   if (loading || !user) return <Spinner label="불러오는 중..." />;
 
   const topCount = rows ? Math.ceil(rows.length / 2) : 0;
+  const known = new Set((rows ?? []).map((d) => d.slug));
+  // 방이 없어진 미션은 사라지지 않고 로비에 모인다 — 여기서 다시 배치한다.
+  const lobby = (scenarios ?? []).filter((s) => !s.is_archived && !known.has(s.department ?? ""));
 
   return (
     <Shell user={user}>
@@ -125,48 +150,35 @@ export default function DepartmentsPage() {
         </p>
       </div>
 
-      {!rows ? (
+      {!rows || !scenarios ? (
         <Spinner />
       ) : (
         <div className="space-y-6">
-          <Card className="overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
-                <tr>
-                  <th className="px-4 py-3">자리</th>
-                  <th className="px-4 py-3">부서</th>
-                  <th className="px-4 py-3">방 설명</th>
-                  <th className="px-4 py-3">시나리오</th>
-                  <th className="px-4 py-3 text-right">순서</th>
-                  <th className="w-24 px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {rows.map((d, i) => (
-                  <tr key={d.id} className="align-top">
-                    <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-400">
-                      {i < topCount ? "위" : "아래"} {(i < topCount ? i : i - topCount) + 1}번째
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="h-3 w-3 shrink-0 rounded-sm"
-                          style={{ background: d.accent }}
-                          aria-hidden="true"
-                        />
-                        <span className="font-semibold">{d.label}</span>
+          <div className="space-y-3">
+            {rows.map((d, i) => {
+              const mine = scenarios.filter((s) => s.department === d.slug && !s.is_archived);
+              const elsewhere = scenarios.filter((s) => !s.is_archived && s.department !== d.slug);
+              return (
+                <Card key={d.id} className="overflow-hidden">
+                  <div className="flex flex-wrap items-start gap-3 border-b border-slate-100 p-4">
+                    <span
+                      className="mt-1 h-4 w-4 shrink-0 rounded-sm"
+                      style={{ background: d.accent }}
+                      aria-hidden="true"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="font-bold">{d.label}</h2>
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
+                          {d.slug}
+                        </code>
+                        <span className="text-xs text-slate-400">
+                          {i < topCount ? "위" : "아래"} {(i < topCount ? i : i - topCount) + 1}번째 방
+                        </span>
                       </div>
-                      <code className="mt-0.5 block text-[11px] text-slate-400">{d.slug}</code>
-                    </td>
-                    <td className="max-w-md px-4 py-3 text-slate-600">{d.summary}</td>
-                    <td className="whitespace-nowrap px-4 py-3">
-                      {d.scenario_count ? (
-                        <span className="text-slate-700">{d.scenario_count}개</span>
-                      ) : (
-                        <span className="text-amber-600">비어 있음</span>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <p className="mt-1 text-sm text-slate-600">{d.summary}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
                       <button
                         onClick={() => move(i, -1)}
                         disabled={i === 0}
@@ -179,27 +191,131 @@ export default function DepartmentsPage() {
                         onClick={() => move(i, 1)}
                         disabled={i === rows.length - 1}
                         aria-label={`${d.label} 뒤로`}
-                        className="ml-1 rounded border border-slate-200 px-2 py-1 text-xs disabled:opacity-30"
+                        className="rounded border border-slate-200 px-2 py-1 text-xs disabled:opacity-30"
                       >
                         ↓
                       </button>
-                    </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-right">
                       <button
                         onClick={() => setDraft({ ...d })}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                        className="ml-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
                       >
                         수정
                       </button>
-                      <IconButton title="삭제" tone="danger" onClick={() => remove(d)}>
+                      <IconButton title="방 없애기" tone="danger" onClick={() => remove(d)}>
                         <IconDelete />
                       </IconButton>
-                    </td>
-                  </tr>
+                    </div>
+                  </div>
+
+                  {mine.length === 0 ? (
+                    <p className="px-4 py-3 text-sm text-amber-600">
+                      이 방에는 미션이 없습니다. 응시자에게는 빈 방으로 보입니다.
+                    </p>
+                  ) : (
+                    <ul className="divide-y divide-slate-50">
+                      {mine.map((s) => (
+                        <li key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+                          <Link
+                            href={`/admin/scenarios/${s.id}`}
+                            className="min-w-0 flex-1 truncate text-sm hover:text-sky-600 hover:underline"
+                          >
+                            {s.title}
+                          </Link>
+                          <span className="shrink-0 text-xs text-slate-400">
+                            {DIFFICULTY_LABEL[s.difficulty] ?? s.difficulty} · 체크 {s.check_count}개
+                          </span>
+                          <label className="shrink-0 text-xs text-slate-500">
+                            <span className="sr-only">{s.title} 을 옮길 방</span>
+                            <select
+                              className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                              value={s.department ?? ""}
+                              onChange={(e) => moveScenario(s, e.target.value)}
+                            >
+                              {rows.map((o) => (
+                                <option key={o.id} value={o.slug}>
+                                  {o.label}
+                                </option>
+                              ))}
+                              <option value="">로비 (미배치)</option>
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => moveScenario(s, "")}
+                            className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 transition hover:border-slate-300 hover:text-slate-700"
+                          >
+                            빼기
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {/* 방을 채우는 두 가지 길 — 새로 쓰거나, 다른 방에서 가져오거나. */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/60 px-4 py-2.5">
+                    <Link
+                      href={`/admin/scenarios/new?department=${d.slug}`}
+                      className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                      + 이 방에 새 미션
+                    </Link>
+                    {elsewhere.length > 0 && (
+                      <label className="text-xs text-slate-500">
+                        <span className="sr-only">{d.label}에 넣을 미션</span>
+                        <select
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                          value=""
+                          onChange={(e) => {
+                            const picked = elsewhere.find((x) => x.id === e.target.value);
+                            if (picked) moveScenario(picked, d.slug);
+                          }}
+                        >
+                          <option value="">다른 방에서 가져오기...</option>
+                          {elsewhere.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          {lobby.length > 0 && (
+            <Card className="overflow-hidden border-dashed">
+              <div className="border-b border-slate-100 p-4">
+                <h2 className="font-bold">로비 — 아직 방이 정해지지 않은 미션 {lobby.length}개</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  응시자 화면에서는 사무실 구석의 목록으로 보입니다. 방을 정해 주면 그 팀 자리로
+                  옮겨 갑니다.
+                </p>
+              </div>
+              <ul className="divide-y divide-slate-50">
+                {lobby.map((s) => (
+                  <li key={s.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+                    <span className="min-w-0 flex-1 truncate text-sm">{s.title}</span>
+                    <select
+                      aria-label={`${s.title} 을 옮길 방`}
+                      className="shrink-0 rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                      value=""
+                      onChange={(e) => moveScenario(s, e.target.value)}
+                    >
+                      <option value="">방 고르기...</option>
+                      {rows.map((o) => (
+                        <option key={o.id} value={o.slug}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </Card>
+              </ul>
+            </Card>
+          )}
 
           <Card className="p-6">
             <h2 className="font-bold">{draft.id ? "부서 수정" : "부서 추가"}</h2>
