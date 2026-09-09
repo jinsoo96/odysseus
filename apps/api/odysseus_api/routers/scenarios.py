@@ -17,7 +17,6 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..checks import as_number
 from ..db import get_db
-from ..departments import department_vocabulary
 from ..deps import require_admin, require_staff
 from ..models import AssessmentScenario, Execution, MessengerMessage, Scenario, User, WorkspaceFile
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
@@ -179,12 +178,6 @@ async def author_chat(body: AuthorChatIn, db: AsyncSession = Depends(get_db), _=
             yield f"data: {_json.dumps({'error': info['message'], 'code': info['code'], 'correlation_id': info['correlation_id']}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@router.get("/departments")
-async def scenario_departments(_=Depends(require_staff)):
-    """부서 어휘 — 슬러그와 이름을 프론트에 하드코딩하지 않기 위해 서버가 준다."""
-    return department_vocabulary()
 
 
 @router.get("/rubric-default")

@@ -28,6 +28,7 @@ export function Sector({
   onEnter,
   onStart,
   onPeek,
+  labelOf,
 }: {
   layout: RoomLayout;
   label: string;
@@ -39,6 +40,7 @@ export function Sector({
   onEnter: () => void;
   onStart: (assignment: MyAssignment) => void;
   onPeek: (assignment: MyAssignment | null) => void;
+  labelOf: (slug: string) => string;
 }) {
   const { room, desks } = layout;
   const inner = innerOrigin(room);
@@ -110,6 +112,7 @@ export function Sector({
                 onStart={() => onStart(a)}
                 onEnterRoom={onEnter}
                 onPeek={onPeek}
+                labelOf={labelOf}
               />
             </li>
           ))}
@@ -129,6 +132,7 @@ export function Sector({
                   onStart={() => onStart(a)}
                   onEnterRoom={onEnter}
                   onPeek={onPeek}
+                  labelOf={labelOf}
                 />
               </li>
             ))}

@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from .departments import normalize_department
+from .departments import normalize_slug
 from .desktop import normalize_desktop_apps
 
 #: 관리자가 직접 부여할 수 있는 역할. guest 는 여기 없다 — 게스트 계정은
@@ -195,7 +195,7 @@ class ScenarioIn(BaseModel):
     @field_validator("department")
     @classmethod
     def _clean_department(cls, value: str | None) -> str | None:
-        return None if value is None else normalize_department(value)
+        return None if value is None else normalize_slug(value)
 
 
 class ScenarioSummary(BaseModel):

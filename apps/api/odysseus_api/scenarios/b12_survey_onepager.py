@@ -249,7 +249,7 @@ SCENARIO = {
     "title": "조직문화 설문 — 한 장 보고",
     "summary": "사무 실무 — 익명성 규칙을 지켜 집계하고 분량 상한 안에서 결론과 실행안만 남기는 요약 과제",
     "difficulty": "medium",
-    "department": "hr",
+    "department": "analytics",
     "briefing_md": """**목요일 오전 10시 30분.**
 
 하반기 조직문화 설문 응답 22건이 원자료 그대로 들어왔습니다. 부서별 평균을 내고 임원 보고 문서를 만들어야 합니다.

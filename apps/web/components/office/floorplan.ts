@@ -1,5 +1,3 @@
-import type { DepartmentId } from "@/lib/types";
-
 /** 사무실 한 층 — 좌표와 배치에 관한 유일한 진실.
  *
  * 규칙 하나로 요약된다: **사람이 물건의 좌표를 타이핑하지 않는다.** 예전에는 자리를
@@ -22,19 +20,6 @@ import type { DepartmentId } from "@/lib/types";
 
 /** 한 칸. 모든 치수가 이 배수다. */
 export const TILE = 32;
-
-export const WORLD = { width: 1280, height: 800 };
-
-/** 복도 — 모든 방이 여기로 문을 낸다. 아바타는 이 띠 위를 걷는다. */
-export const CORRIDOR = { top: 352, bottom: 448, left: 96, right: 1248 };
-export const CORRIDOR_Y = (CORRIDOR.top + CORRIDOR.bottom) / 2;
-
-/** 엘리베이터 — 왼쪽 벽에 박힌 샤프트와, 그 앞 복도의 대기 지점 */
-export const ELEVATOR_CAR = { x: 0, y: 352, w: 96, h: 96 };
-export const ELEVATOR = { x: 128, y: CORRIDOR_Y };
-
-/** 복도 동쪽 끝을 막는 창 — 복도에 끝이 있다는 감각을 준다 */
-export const WINDOW_BAY = { x: 1248, y: 352, w: 32, h: 96 };
 
 /** 방 하나의 바깥 치수(벽 포함). 여덟 방이 전부 같다.
  *
@@ -78,7 +63,9 @@ export type PropKind =
   | "colleague";
 
 export interface Room {
-  id: DepartmentId;
+  /** 부서 키 */
+  id: string;
+  label: string;
   x: number;
   y: number;
   side: "north" | "south";
@@ -91,28 +78,122 @@ export interface Room {
   propKinds: PropKind[];
 }
 
-export const ROOMS: Record<DepartmentId, Room> = {
-  dev: { id: "dev", x: 128, y: 32, side: "north", accent: "#62A8C8", floor: "#20304a", propKinds: ["shelf", "plant", "cooler"] },
-  product: { id: "product", x: 384, y: 32, side: "north", accent: "#9B8FD1", floor: "#232e4c", propKinds: ["plant", "shelf", "printer"] },
-  planning: { id: "planning", x: 640, y: 32, side: "north", accent: "#8496D6", floor: "#222e4c", propKinds: ["cabinet", "plant", "printer"] },
-  finance: { id: "finance", x: 896, y: 32, side: "north", accent: "#6DBBA0", floor: "#1e3244", propKinds: ["cabinet", "shelf", "plant"] },
-  hr: { id: "hr", x: 128, y: 448, side: "south", accent: "#D28FA0", floor: "#2a2c46", propKinds: ["sofa", "plant", "cooler"] },
-  ga: { id: "ga", x: 384, y: 448, side: "south", accent: "#C9A96A", floor: "#2b2c3e", propKinds: ["printer", "cabinet", "shelf"] },
-  ops: { id: "ops", x: 640, y: 448, side: "south", accent: "#6FBDB4", floor: "#1e3245", propKinds: ["cabinet", "printer", "plant"] },
-  cs: { id: "cs", x: 896, y: 448, side: "south", accent: "#C58FC9", floor: "#2a2b4a", propKinds: ["cooler", "plant", "sofa"] },
-};
+/** 한 층에 놓을 수 있는 방의 수. 서버(`departments.MAX_DEPARTMENTS`)와 같은 값이다. */
+export const MAX_ROOMS = 16;
 
-/** 표시 순서 — `Object.values` 의 순서에 기대지 않는다. */
-export const ROOM_ORDER: DepartmentId[] = [
-  "dev",
-  "product",
-  "planning",
-  "finance",
-  "hr",
-  "ga",
-  "ops",
-  "cs",
+/** 부서 하나가 들어가는 방을 만든다.
+ *
+ *  좌표를 사람이 적지 않는다. 부서 목록의 순서만 있으면 방이 어디에 설지 계산된다 —
+ *  부서를 하나 더 만들면 층에 방이 하나 더 생기고, 순서를 바꾸면 방이 옮겨 간다.
+ */
+export interface Floor {
+  rooms: Room[];
+  world: { width: number; height: number };
+  corridor: { top: number; bottom: number; left: number; right: number };
+  corridorY: number;
+  elevatorCar: { x: number; y: number; w: number; h: number };
+  /** 엘리베이터 앞 복도 — 출근하면 여기 선다 */
+  spawn: { x: number; y: number };
+  windowBay: { x: number; y: number; w: number; h: number };
+}
+
+/** 복도 좌우로 남기는 여백. 왼쪽은 엘리베이터가, 오른쪽은 창이 채운다. */
+const MARGIN_X = 128;
+/** 건물 위아래 여백 */
+const MARGIN_Y = 32;
+/** 복도 높이 */
+const CORRIDOR_H = 3 * TILE;
+
+/** 소품 종류는 부서 키에서 결정론적으로 고른다.
+ *
+ *  관리자가 방마다 화분을 몇 개 놓을지 정하게 만들 이유가 없다. 같은 부서면 언제나
+ *  같은 물건이 서고, 방마다는 달라 보인다. */
+const PROP_POOL: PropKind[][] = [
+  ["shelf", "plant", "cooler"],
+  ["cabinet", "plant", "printer"],
+  ["plant", "shelf", "printer"],
+  ["cooler", "cabinet", "plant"],
+  ["sofa", "plant", "cooler"],
+  ["printer", "cabinet", "shelf"],
+  ["cabinet", "printer", "plant"],
+  ["plant", "sofa", "shelf"],
 ];
+
+function propsFor(slug: string): PropKind[] {
+  let h = 2166136261;
+  for (let i = 0; i < slug.length; i += 1) {
+    h ^= slug.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return PROP_POOL[(h >>> 0) % PROP_POOL.length];
+}
+
+/** 바닥 색 — 부서 색을 아주 조금만 섞은 어두운 카펫.
+ *
+ *  방을 부서 색으로 칠하면 여덟 개의 색 견본이 되어 한 건물로 보이지 않는다. 밝기를
+ *  거의 같게 두고 색조만 스치듯 남겨, 두 방이 맞붙어 있을 때만 다름을 알아보게 한다. */
+function carpetOf(accent: string): string {
+  const base = { r: 0x20, g: 0x2b, b: 0x42 };
+  const hex = accent.replace("#", "");
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  const mix = (a: number, c: number) => Math.round(a * 0.9 + c * 0.1);
+  const to2 = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${to2(mix(base.r, r))}${to2(mix(base.g, g))}${to2(mix(base.b, b))}`;
+}
+
+/** 부서 목록 → 층 하나.
+ *
+ *  위 줄에 앞의 절반, 아래 줄에 나머지. 방 크기는 전부 같다 — 같아야 배치기 하나가
+ *  모든 방을 맡고 검증 하나가 모든 방을 덮는다. */
+export function buildFloor(
+  departments: { slug: string; label: string; accent: string }[],
+): Floor {
+  const list = departments.slice(0, MAX_ROOMS);
+  const topCount = Math.ceil(list.length / 2);
+  const perRow = Math.max(1, Math.max(topCount, list.length - topCount));
+
+  const width = Math.max(perRow * ROOM.w + MARGIN_X * 2, 640);
+  const height = ROOM.h * 2 + CORRIDOR_H + MARGIN_Y * 2;
+  const corridorTop = MARGIN_Y + ROOM.h;
+  const corridor = {
+    top: corridorTop,
+    bottom: corridorTop + CORRIDOR_H,
+    left: MARGIN_X - TILE,
+    right: width - (MARGIN_X - TILE),
+  };
+  const corridorY = (corridor.top + corridor.bottom) / 2;
+
+  const rooms: Room[] = list.map((d, i) => {
+    const north = i < topCount;
+    const col = north ? i : i - topCount;
+    const countInRow = north ? topCount : list.length - topCount;
+    // 줄에 방이 적으면 가운데로 모은다 — 한쪽으로 쏠려 있으면 층이 미완성으로 보인다
+    const rowWidth = countInRow * ROOM.w;
+    const x = Math.round((width - rowWidth) / 2) + col * ROOM.w;
+    return {
+      id: d.slug,
+      label: d.label,
+      x,
+      y: north ? MARGIN_Y : corridor.bottom,
+      side: north ? "north" : "south",
+      accent: d.accent,
+      floor: carpetOf(d.accent),
+      propKinds: propsFor(d.slug),
+    };
+  });
+
+  return {
+    rooms,
+    world: { width, height },
+    corridor,
+    corridorY,
+    elevatorCar: { x: corridor.left - 96, y: corridor.top, w: 96, h: CORRIDOR_H },
+    spawn: { x: corridor.left + 32, y: corridorY },
+    windowBay: { x: corridor.right, y: corridor.top, w: TILE, h: CORRIDOR_H },
+  };
+}
 
 /** 방 안쪽 바닥의 왼쪽 위 모서리 */
 export function innerOrigin(room: Room): { x: number; y: number } {

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
-import type { Attempt, MyAssignment } from "@/lib/types";
+import type { Attempt, Department, MyAssignment } from "@/lib/types";
 import { useUser, logout } from "@/components/useUser";
 import { useToast } from "@/components/toast";
 import { Spinner } from "@/components/ui";
@@ -34,6 +34,7 @@ function initialSpatial(): boolean {
 export default function OfficePage() {
   const { user, loading } = useUser(["candidate", "admin", "evaluator", "guest"]);
   const [assignments, setAssignments] = useState<MyAssignment[] | null>(null);
+  const [departments, setDepartments] = useState<Department[] | null>(null);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [spatial, setSpatial] = useState(false);
@@ -50,9 +51,15 @@ export default function OfficePage() {
 
   useEffect(() => {
     if (!user) return;
-    api
-      .get<MyAssignment[]>("/my/assignments")
-      .then(setAssignments)
+    // 사무실의 방 목록은 서버가 정본이다 — 관리자가 만든 부서를 코드가 알 수 없다.
+    Promise.all([
+      api.get<MyAssignment[]>("/my/assignments"),
+      api.get<Department[]>("/departments"),
+    ])
+      .then(([mine, depts]) => {
+        setAssignments(mine);
+        setDepartments(depts);
+      })
       .catch((e) => setError(String(e.message)));
   }, [user]);
 
@@ -113,7 +120,7 @@ export default function OfficePage() {
             Odysseus<span className="text-sky-400">.</span>
           </h1>
           <p className="mt-0.5 truncate text-xs text-slate-400">
-            {user.name}님, 출근했습니다. 일이 있는 팀으로 가서 자리에 앉으세요.
+            {user.name}님, 첫 출근입니다. 배정된 팀으로 가서 자리에 앉으면 그 자리의 일이 시작됩니다.
           </p>
         </div>
 
@@ -156,7 +163,7 @@ export default function OfficePage() {
 
       <main id="office-content" className="office-main">
         {error && <p className="office-error">{error}</p>}
-        {!assignments ? (
+        {!assignments || !departments ? (
           <Spinner />
         ) : assignments.length === 0 ? (
           <p className="office-empty">
@@ -165,6 +172,7 @@ export default function OfficePage() {
         ) : (
           <OfficeStage
             spatial={spatial}
+            departments={departments}
             assignments={assignments}
             seed={user.id ?? user.name ?? "odysseus"}
             busyId={busyId}

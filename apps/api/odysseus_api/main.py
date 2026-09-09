@@ -15,6 +15,7 @@ from .routers import (
     assessments,
     attempts,
     auth,
+    departments,
     executions,
     files,
     internal,
@@ -121,6 +122,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(access.router)
+app.include_router(departments.router)
 app.include_router(scenarios.router)
 app.include_router(assessments.router)
 app.include_router(attempts.router)

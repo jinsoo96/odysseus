@@ -86,6 +86,40 @@ class Session(Base):
     user_agent: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
+class Department(Base):
+    """건물 안의 한 방 = 채용하는 직군 하나.
+
+    이 목록이 코드가 아니라 데이터인 이유는, 회사마다 뽑는 직군이 다르기 때문이다.
+    AI 를 뽑는 회사와 게임 서버를 뽑는 회사가 같은 층을 쓸 수는 없다. 관리자가
+    부서를 만들고 이름과 색과 순서를 정하면 **평면도가 그 목록에서 생성된다** —
+    화면 어디에도 방의 좌표를 적어 둔 곳이 없다.
+
+    기본값으로 요즘 테크 회사의 채용 직군 한 벌이 들어가지만, 그건 시드일 뿐
+    지우거나 바꿔도 된다.
+
+    slug 는 시나리오가 참조하는 키다(`Scenario.department`). 외래키를 걸지 않은
+    것은 의도적이다: 부서를 지웠다고 시나리오가 사라지면 안 되고, 갈 곳을 잃은
+    시나리오는 화면에서 '로비'로 모여 다시 배치되기를 기다린다.
+    """
+
+    __tablename__ = "departments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    #: 시나리오가 가리키는 키. 소문자 영문·숫자·하이픈.
+    slug: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(60))
+    #: 방에 들어섰을 때 보이는 한 줄. 이 방에서 무슨 일을 하는가.
+    summary: Mapped[str] = mapped_column(String(300), default="")
+    #: 문패·문턱·불 켜진 화면에만 쓰는 색(#RRGGBB). 바닥을 이 색으로 칠하지 않는다.
+    accent: Mapped[str] = mapped_column(String(9), default="#62A8C8")
+    #: 평면도 배치 순서. 위 줄 왼쪽부터.
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    #: 이 방의 시나리오를 새로 만들 때 권하는 앱 조합(desktop.APP_PRESETS 의 키).
+    app_preset: Mapped[str] = mapped_column(String(20), default="office")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class Scenario(Base):
     """시나리오 — 하나의 '가상 업무 상황' 전체.
 

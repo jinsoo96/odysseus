@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..db import get_db
-from ..departments import normalize_departments
+from ..departments import normalize_slugs
 from ..definitions import (
     FrozenScenario,
     bind_definition,
@@ -265,7 +265,7 @@ async def my_assignments(user: User = Depends(get_current_user), db: AsyncSessio
         collected: dict[uuid.UUID, list[str]] = {}
         for assessment_id, department in rows:
             collected.setdefault(assessment_id, []).append(department or "")
-        departments_of = {k: normalize_departments(v) for k, v in collected.items()}
+        departments_of = {k: normalize_slugs(v) for k, v in collected.items()}
 
     return [
         MyAssignmentOut(

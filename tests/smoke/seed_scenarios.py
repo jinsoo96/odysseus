@@ -23,10 +23,10 @@ import sys
 from sqlalchemy import select
 
 from odysseus_api.db import SessionLocal
-from odysseus_api.departments import normalize_department
+from odysseus_api.departments import normalize_slug
 from odysseus_api.models import Assessment, AssessmentScenario, Assignment, Scenario, User
 from odysseus_api.scenarios import DEFAULT_ASSESSMENTS, DEFAULT_SCENARIOS
-from odysseus_api.seed import scenario_row
+from odysseus_api.seed import scenario_row, seed_departments
 
 
 async def main() -> None:
@@ -37,6 +37,9 @@ async def main() -> None:
         candidate = (
             await db.execute(select(User).where(User.email == "candidate@odysseus.dev"))
         ).scalar_one_or_none()
+
+        # 방이 하나도 없으면(부서가 생기기 전에 배포된 곳) 기본 한 벌을 먼저 놓는다
+        await seed_departments(db)
 
         existing = {
             s.title: s for s in (await db.execute(select(Scenario))).scalars().all()
@@ -54,8 +57,8 @@ async def main() -> None:
                 if refresh_chars and row.characters != spec.get("characters", []):
                     row.characters = spec.get("characters", [])
                     recast += 1
-                if refresh_depts and row.department != normalize_department(spec.get("department")):
-                    row.department = normalize_department(spec.get("department"))
+                if refresh_depts and row.department != normalize_slug(spec.get("department")):
+                    row.department = normalize_slug(spec.get("department"))
                     rehoused += 1
                 continue
             row = scenario_row(spec, admin.id if admin else None)

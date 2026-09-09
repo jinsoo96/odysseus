@@ -12,10 +12,10 @@ import type {
   InitialFile,
   OpeningMessage,
   Rubric,
+  Department,
   Scenario,
   ScenarioDraft,
 } from "@/lib/types";
-import { DEPARTMENT_LABEL } from "@/lib/format";
 import { ScenarioAuthorChat } from "@/components/ScenarioAuthorChat";
 import { CodeEditor } from "@/components/CodeEditor";
 import { Markdown } from "@/components/Markdown";
@@ -109,6 +109,11 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
   const [summary, setSummary] = useState(initial?.summary ?? "");
   const [difficulty, setDifficulty] = useState(initial?.difficulty ?? "medium");
   const [department, setDepartment] = useState(initial?.department ?? "");
+  // 부서는 관리자가 만드는 데이터라 코드가 목록을 알지 못한다 — 서버에서 받아 온다.
+  const [departments, setDepartments] = useState<Department[]>([]);
+  useEffect(() => {
+    api.get<Department[]>("/departments").then(setDepartments).catch(() => setDepartments([]));
+  }, []);
   const [briefing, setBriefing] = useState(initial?.briefing_md ?? "");
   // NPC 기본 규칙 덮어쓰기 — 비어 있으면 전역 기본을 쓴다. 기본값은 필요할 때 서버에서 받아 온다.
   const [npcRules, setNpcRules] = useState(initial?.npc_base_prompt ?? "");
@@ -352,9 +357,9 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
               onChange={(e) => setDepartment(e.target.value)}
             >
               <option value="">로비 (미배치)</option>
-              {DEPARTMENTS.map((d) => (
-                <option key={d} value={d}>
-                  {DEPARTMENT_LABEL[d]}
+              {departments.map((d) => (
+                <option key={d.slug} value={d.slug}>
+                  {d.label}
                 </option>
               ))}
             </select>

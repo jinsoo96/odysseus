@@ -156,7 +156,7 @@ SCENARIO = {
     "title": "추론 게이트웨이가 SLO를 못 맞추고 비용도 넘겼다",
     "summary": "게이트웨이 로그 600건 분석 — p95 지연/비용 산출과 라우팅 규칙 개선 (정답 수치 자동 채점)",
     "difficulty": "hard",
-    "department": "dev",
+    "department": "ai",
     "briefing_md": (
         """**목요일 오전 8시 24분.**
 

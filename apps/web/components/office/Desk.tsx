@@ -1,7 +1,6 @@
 "use client";
 
 import type { MyAssignment } from "@/lib/types";
-import { DEPARTMENT_LABEL } from "@/lib/format";
 import { DESK_SIZE } from "./floorplan";
 
 /** 자리 하나 = 시험 하나.
@@ -35,6 +34,7 @@ export function Desk({
   onStart,
   onEnterRoom,
   onPeek,
+  labelOf,
 }: {
   assignment: MyAssignment;
   spatial: boolean;
@@ -49,6 +49,8 @@ export function Desk({
   onEnterRoom: () => void;
   /** 이름표와 하단 바에 띄울 대상. 벗어나면 null. */
   onPeek: (assignment: MyAssignment | null) => void;
+  /** 부서 키 → 이름. 부서는 데이터라서 이름을 코드가 알지 못한다. */
+  labelOf: (slug: string) => string;
 }) {
   const finished = Boolean(assignment.attempt_status && assignment.attempt_status !== "in_progress");
   const resuming = assignment.attempt_status === "in_progress";
@@ -59,7 +61,7 @@ export function Desk({
   const action = deskAction(assignment, armed);
 
   const chain = visiting.length
-    ? ` ${visiting.map((d) => DEPARTMENT_LABEL[d] ?? d).join("·")}까지 이어집니다.`
+    ? ` ${visiting.map(labelOf).join("·")}까지 이어집니다.`
     : "";
   const step = armed || finished ? "" : " 누르면 이 자리로 갑니다 — 아직 시험은 시작되지 않습니다.";
   // 이름표가 제목을 그대로 보여 주므로(보이는 이름), 접근 가능한 이름은 반드시
@@ -121,7 +123,7 @@ export function Desk({
             </span>
             {visiting.length > 0 && (
               <span className="office-desk-meta office-desk-visiting">
-                {visiting.map((d) => DEPARTMENT_LABEL[d] ?? d).join("·")}까지 이어집니다
+                {visiting.map(labelOf).join("·")}까지 이어집니다
               </span>
             )}
             {assignment.description && (

@@ -14,6 +14,7 @@ export function Shell({ user, children, wide = false }: { user: User; children: 
   const links = [
     ...(user.role === "admin"
       ? [
+          { href: "/admin/departments", label: "부서" },
           { href: "/admin/scenarios", label: "시나리오" },
           { href: "/admin/assessments", label: "시험" },
           { href: "/admin/users", label: "사용자" },

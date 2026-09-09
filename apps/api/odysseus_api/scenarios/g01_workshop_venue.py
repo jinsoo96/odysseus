@@ -203,7 +203,7 @@ SCENARIO = {
     "title": "하반기 워크숍 장소 선정",
     "summary": "단순 문제 해결 — 표에 없는 선정 기준을 대화로 모아야 후보가 하나로 좁혀지는 비교·계산 과제",
     "difficulty": "easy",
-    "department": "ga",
+    "department": "finance",
     "briefing_md": """**수요일 오후 2시.**
 
 총무팀에서 11월 팀 워크숍 장소를 정해 달라는 요청이 왔습니다. 후보 다섯 곳의 견적은 이미 표로 정리돼 있습니다.

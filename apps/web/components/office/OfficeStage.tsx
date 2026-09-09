@@ -1,49 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DepartmentId, MyAssignment } from "@/lib/types";
-import { DEPARTMENT_LABEL } from "@/lib/format";
+import type { Department, MyAssignment } from "@/lib/types";
 import { Avatar, AVATAR_SIZE, Bystander } from "./Avatar";
 import { Desk, deskAction } from "./Desk";
 import { Sector } from "./Sector";
 import { OfficeSprites } from "./sprites";
 import { useWalk } from "./useWalk";
 import {
-  CORRIDOR,
   DESK_SIZE,
-  ELEVATOR,
-  ELEVATOR_CAR,
   INNER_COLS,
   INNER_ROWS,
   MIN_SPATIAL_FIT,
   ROOM,
-  ROOMS,
-  ROOM_ORDER,
   TILE,
   WALL,
   WALL_DRAW,
-  WINDOW_BAY,
-  WORLD,
+  buildFloor,
   innerOrigin,
   layoutRoom,
   standingSpotOf,
   thresholdOf,
   wallRuns,
+  type Floor,
   type Room,
   type RoomLayout,
 } from "./floorplan";
-
-/** 방 설명 — 서버 어휘와 같은 문장. 로그인 직후 바로 그려야 해서 요청을 더 하지 않는다. */
-const SECTOR_SUMMARY: Record<DepartmentId, string> = {
-  dev: "장애를 재현하고 원인을 찾아 고칩니다. 터미널과 IDE 가 있는 유일한 방입니다.",
-  product: "부서 사이에 낀 요구를 정리해 무엇을 먼저 할지 정합니다.",
-  planning: "숫자를 모아 결정을 만들고, 그 결정을 문서로 남깁니다.",
-  finance: "예산과 정산 — 규정과 금액이 맞는지 끝까지 확인합니다.",
-  hr: "사람 사이의 일. 일정과 갈등, 그리고 규정 안에서 쓸 수 있는 문장.",
-  ga: "공간과 비품 — 조건을 모으면 답이 하나로 정해지는 일들입니다.",
-  ops: "현장의 제약 안에서 실행 가능한 계획을 세웁니다.",
-  cs: "고객에게 나가는 말. 확인된 사실만으로, 규정 안에서.",
-};
 
 /** 방 안까지 들어갔을 때의 배율. 이 이상 당기면 옆 방이 화면에서 사라져 길을 잃는다. */
 const ZOOM_IN = 1.5;
@@ -63,6 +45,7 @@ const PROP_ART: Record<string, { href: string; w: number; h: number; dy: number 
 
 export function OfficeStage({
   spatial,
+  departments,
   assignments,
   seed,
   busyId,
@@ -71,6 +54,8 @@ export function OfficeStage({
   onTooNarrow,
 }: {
   spatial: boolean;
+  /** 사무실의 방 목록. 코드가 아니라 관리자가 정하는 데이터다. */
+  departments: Department[];
   assignments: MyAssignment[];
   seed: string;
   busyId: string | null;
@@ -79,36 +64,42 @@ export function OfficeStage({
   /** 층을 그리기엔 화면이 좁을 때 — 페이지가 목록으로 돌린다 */
   onTooNarrow: () => void;
 }) {
-  const [entered, setEntered] = useState<DepartmentId | null>(null);
+  const [entered, setEntered] = useState<string | null>(null);
   const [peeked, setPeeked] = useState<MyAssignment | null>(null);
   const [fit, setFit] = useState(1);
   const [viewSize, setViewSize] = useState({ w: 0, h: 0 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const { pos, facing, step, walkTo, stop } = useWalk();
+
+  /** 층 — 부서 목록에서 만들어진다. 방의 좌표를 적어 둔 곳은 어디에도 없다. */
+  const floor: Floor = useMemo(() => buildFloor(departments), [departments]);
+  const { pos, facing, step, walkTo, stop } = useWalk(floor.spawn, floor.corridorY);
+  const roomOf = useMemo(() => new Map(floor.rooms.map((r) => [r.id, r])), [floor]);
+  const deptOf = useMemo(() => new Map(departments.map((d) => [d.slug, d])), [departments]);
+  const labelOf = useCallback((slug: string) => deptOf.get(slug)?.label ?? slug, [deptOf]);
 
   /** 시험을 부서별로 나눈다 — 첫 부서가 그 일이 시작되는 자리다. */
   const byDepartment = useMemo(() => {
-    const map = new Map<DepartmentId, MyAssignment[]>();
-    ROOM_ORDER.forEach((id) => map.set(id, []));
+    const map = new Map<string, MyAssignment[]>();
+    floor.rooms.forEach((r) => map.set(r.id, []));
     const lobby: MyAssignment[] = [];
     assignments.forEach((a) => {
-      const home = (a.departments?.[0] ?? "") as DepartmentId;
+      const home = a.departments?.[0] ?? "";
       const bucket = map.get(home);
       if (bucket) bucket.push(a);
       else lobby.push(a);
     });
     return { map, lobby };
-  }, [assignments]);
+  }, [assignments, floor]);
 
   /** 방 배치는 한 번만 계산한다. 자리도 소품도 여기서 나온다 — 화면 어디에도
    *  좌표를 손으로 적어 둔 곳이 없다. */
   const layouts = useMemo(() => {
-    const out = new Map<DepartmentId, RoomLayout>();
-    ROOM_ORDER.forEach((id) => {
-      out.set(id, layoutRoom(ROOMS[id], byDepartment.map.get(id)?.length ?? 0));
+    const out = new Map<string, RoomLayout>();
+    floor.rooms.forEach((r) => {
+      out.set(r.id, layoutRoom(r, byDepartment.map.get(r.id)?.length ?? 0));
     });
     return out;
-  }, [byDepartment]);
+  }, [byDepartment, floor]);
 
   /** 화면 폭에 맞춰 층 전체가 들어가도록 배율을 잡는다. */
   useEffect(() => {
@@ -120,7 +111,7 @@ export function OfficeStage({
       if (!rect.width || !rect.height) return;
       // 하단 바가 층을 가리지 않도록 그만큼 빼고 배율을 잡는다.
       const usableH = Math.max(160, rect.height - BAR_H);
-      const next = Math.min(rect.width / WORLD.width, usableH / WORLD.height);
+      const next = Math.min(rect.width / floor.world.width, usableH / floor.world.height);
       setFit(next);
       setViewSize({ w: rect.width, h: usableH });
       // 자리가 눌리지 않을 만큼 작아지면 층을 고집하지 않는다.
@@ -130,7 +121,7 @@ export function OfficeStage({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [spatial, onTooNarrow]);
+  }, [spatial, onTooNarrow, floor]);
 
   /** 목록 모드로 바꾸면 걷기를 멈추고 방에서 나온다 — 상태가 두 모드에 걸치지 않게. */
   useEffect(() => {
@@ -142,26 +133,28 @@ export function OfficeStage({
   }, [spatial, stop]);
 
   const enter = useCallback(
-    (id: DepartmentId) => {
+    (id: string) => {
       if (!spatial || entered === id) return;
       setEntered(id);
-      walkTo(standingSpotOf(ROOMS[id]));
+      const target = roomOf.get(id);
+      if (!target) return;
+      walkTo(standingSpotOf(target));
       const count = byDepartment.map.get(id)?.length ?? 0;
       onAnnounce(
         count === 0
-          ? `${DEPARTMENT_LABEL[id]}에 들어왔습니다. 배정된 시험이 없습니다.`
-          : `${DEPARTMENT_LABEL[id]}에 들어왔습니다. 시험 ${count}개가 있습니다.`,
+          ? `${labelOf(id)}에 들어왔습니다. 배정된 시험이 없습니다.`
+          : `${labelOf(id)}에 들어왔습니다. 시험 ${count}개가 있습니다.`,
       );
     },
-    [spatial, entered, walkTo, byDepartment, onAnnounce],
+    [spatial, entered, walkTo, byDepartment, onAnnounce, roomOf, labelOf],
   );
 
   const leave = useCallback(() => {
     setEntered(null);
     setPeeked(null);
-    walkTo(ELEVATOR);
+    walkTo(floor.spawn);
     onAnnounce("복도로 나왔습니다.");
-  }, [walkTo, onAnnounce]);
+  }, [walkTo, onAnnounce, floor]);
 
   // Esc 는 두 단계다. 먼저 이름표를 접고, 그 다음에 복도로 나간다 — 떠 있는 정보를
   // 포커스를 옮기지 않고 닫을 수 있어야 한다는 요구(WCAG 1.4.13)를 이렇게 만족시킨다.
@@ -179,32 +172,33 @@ export function OfficeStage({
     return () => window.removeEventListener("keydown", onKey);
   }, [spatial, entered, peeked, leave]);
 
-  const room = entered ? ROOMS[entered] : null;
+  const room = entered ? roomOf.get(entered) ?? null : null;
   const scale = spatial ? fit * (room ? ZOOM_IN : 1) : 1;
   // 카메라를 층 안에 가둔다. 가두지 않으면 가장자리 방에 들어갔을 때 화면 절반이
   // 건물 바깥의 빈 어둠이 된다 — 방에 들어간 게 아니라 떨어진 것처럼 보인다.
   const clamp = (v: number, half: number, span: number) =>
     half * 2 >= span ? span / 2 : Math.min(Math.max(v, half), span - half);
-  const halfW = viewSize.w ? viewSize.w / scale / 2 : WORLD.width / 2;
-  const halfH = viewSize.h ? viewSize.h / scale / 2 : WORLD.height / 2;
-  const focusX = clamp(room ? room.x + ROOM.w / 2 : WORLD.width / 2, halfW, WORLD.width);
-  const focusY = clamp(room ? room.y + ROOM.h / 2 : WORLD.height / 2, halfH, WORLD.height);
+  const halfW = viewSize.w ? viewSize.w / scale / 2 : floor.world.width / 2;
+  const halfH = viewSize.h ? viewSize.h / scale / 2 : floor.world.height / 2;
+  const focusX = clamp(room ? room.x + ROOM.w / 2 : floor.world.width / 2, halfW, floor.world.width);
+  const focusY = clamp(room ? room.y + ROOM.h / 2 : floor.world.height / 2, halfH, floor.world.height);
   // 월드와 이름표 레이어가 **같은 문자열**을 쓴다. 투영을 두 번 구현하면 반드시 어긋난다.
-  const camera = `translate(-50%, calc(-50% - ${BAR_H / 2}px)) scale(${scale}) translate(${WORLD.width / 2 - focusX}px, ${WORLD.height / 2 - focusY}px)`;
+  const camera = `translate(-50%, calc(-50% - ${BAR_H / 2}px)) scale(${scale}) translate(${floor.world.width / 2 - focusX}px, ${floor.world.height / 2 - focusY}px)`;
 
-  const sectors = ROOM_ORDER.map((id) => (
+  const sectors = floor.rooms.map((r) => (
     <Sector
-      key={id}
-      layout={layouts.get(id) as RoomLayout}
-      label={DEPARTMENT_LABEL[id] ?? id}
-      summary={SECTOR_SUMMARY[id]}
-      assignments={byDepartment.map.get(id) ?? []}
+      key={r.id}
+      layout={layouts.get(r.id) as RoomLayout}
+      label={r.label}
+      summary={deptOf.get(r.id)?.summary ?? ""}
+      assignments={byDepartment.map.get(r.id) ?? []}
       spatial={spatial}
-      entered={entered === id}
+      entered={entered === r.id}
       busyId={busyId}
-      onEnter={() => enter(id)}
+      onEnter={() => enter(r.id)}
       onStart={onStart}
       onPeek={setPeeked}
+      labelOf={labelOf}
     />
   ));
 
@@ -213,7 +207,12 @@ export function OfficeStage({
       <div className="office-list">
         {sectors}
         {byDepartment.lobby.length > 0 && (
-          <LobbySection assignments={byDepartment.lobby} busyId={busyId} onStart={onStart} />
+          <LobbySection
+            assignments={byDepartment.lobby}
+            busyId={busyId}
+            onStart={onStart}
+            labelOf={labelOf}
+          />
         )}
       </div>
     );
@@ -228,36 +227,36 @@ export function OfficeStage({
       <OfficeSprites />
 
       {/* 0. 바닥판 — 건물 바닥, 복도, 엘리베이터, 창 */}
-      <div className="office-world office-layer-base" style={{ ...worldBox, transform: camera }} aria-hidden="true">
+      <div className="office-world office-layer-base" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
         <div
           className="office-corridor"
           style={{
-            left: CORRIDOR.left,
-            top: CORRIDOR.top,
-            width: CORRIDOR.right - CORRIDOR.left,
-            height: CORRIDOR.bottom - CORRIDOR.top,
+            left: floor.corridor.left,
+            top: floor.corridor.top,
+            width: floor.corridor.right - floor.corridor.left,
+            height: floor.corridor.bottom - floor.corridor.top,
           }}
         />
-        <div className="o-elevator" style={rect(ELEVATOR_CAR)}>
+        <div className="o-elevator" style={rect(floor.elevatorCar)}>
           <span className="o-elevator-leaf" />
           <span className="o-elevator-leaf" />
           <span className="o-elevator-call" />
         </div>
-        <div className="o-window" style={rect(WINDOW_BAY)} />
+        <div className="o-window" style={rect(floor.windowBay)} />
       </div>
 
       {/* 1. 방 바닥 — 카펫, 러그, 바닥에 눕힌 부서 이름, 문턱 */}
-      <div className="office-world office-layer-floor" style={{ ...worldBox, transform: camera }} aria-hidden="true">
-        {ROOM_ORDER.map((id) => {
-          const L = layouts.get(id) as RoomLayout;
+      <div className="office-world office-layer-floor" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
+        {floor.rooms.map((r) => {
+          const L = layouts.get(r.id) as RoomLayout;
           const inner = innerOrigin(L.room);
           return (
-            <div key={id} style={{ ["--accent" as string]: L.room.accent }}>
+            <div key={r.id} style={{ ["--accent" as string]: L.room.accent }}>
               {/* 바닥은 방 전체를 덮는다 — 벽이 그 위에 얹혀야 벽과 바닥 사이에
                   틈이 생기지 않는다. */}
               <div
                 className="o-floor"
-                data-entered={entered === id ? "true" : undefined}
+                data-entered={entered === r.id ? "true" : undefined}
                 style={{
                   left: L.room.x,
                   top: L.room.y,
@@ -267,7 +266,7 @@ export function OfficeStage({
                 }}
               />
               <div className="o-decal" style={rect(L.decal)}>
-                {DEPARTMENT_LABEL[id]}
+                {r.label}
               </div>
               <div className="o-threshold" style={rect(thresholdOf(L.room))} />
             </div>
@@ -276,11 +275,11 @@ export function OfficeStage({
       </div>
 
       {/* 2. 아바타 뒤에 서는 건축물 — 북·동·서 벽과 벽걸이 */}
-      <div className="office-world office-layer-back" style={{ ...worldBox, transform: camera }} aria-hidden="true">
-        {ROOM_ORDER.map((id) => {
-          const L = layouts.get(id) as RoomLayout;
+      <div className="office-world office-layer-back" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
+        {floor.rooms.map((r) => {
+          const L = layouts.get(r.id) as RoomLayout;
           return (
-            <div key={id} style={{ ["--accent" as string]: L.room.accent }}>
+            <div key={r.id} style={{ ["--accent" as string]: L.room.accent }}>
               {wallRuns(L.room)
                 .filter((w) => !isFrontWall(w, L.room))
                 .map((w, i) => (
@@ -303,13 +302,13 @@ export function OfficeStage({
       </div>
 
       {/* 3. 소품 — 배치기가 정한 자리에만 선다 */}
-      <div className="office-world office-layer-props" style={{ ...worldBox, transform: camera }} aria-hidden="true">
-        {ROOM_ORDER.map((id) => {
-          const L = layouts.get(id) as RoomLayout;
+      <div className="office-world office-layer-props" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
+        {floor.rooms.map((r) => {
+          const L = layouts.get(r.id) as RoomLayout;
           return L.props.map((p) => {
             if (p.kind === "colleague") {
               return (
-                <div key={`${id}-${p.cell}`} className="o-prop" style={{ left: p.x, top: p.y - 6 }}>
+                <div key={`${r.id}-${p.cell}`} className="o-prop" style={{ left: p.x, top: p.y - 6 }}>
                   <Bystander color={L.room.accent} />
                 </div>
               );
@@ -318,7 +317,7 @@ export function OfficeStage({
             if (!art) return null;
             return (
               <svg
-                key={`${id}-${p.cell}`}
+                key={`${r.id}-${p.cell}`}
                 className="o-prop"
                 style={{ left: p.x, top: p.y + art.dy, width: art.w, height: art.h }}
                 viewBox={`0 0 ${art.w} ${art.h}`}
@@ -331,12 +330,12 @@ export function OfficeStage({
       </div>
 
       {/* 4. 상호작용 — 방 영역과 자리 버튼 */}
-      <div className="office-world office-layer-zones" style={{ ...worldBox, transform: camera }}>
+      <div className="office-world office-layer-zones" style={{ width: floor.world.width, height: floor.world.height, transform: camera }}>
         {sectors}
       </div>
 
       {/* 5. 아바타 */}
-      <div className="office-world office-layer-actor" style={{ ...worldBox, transform: camera }} aria-hidden="true">
+      <div className="office-world office-layer-actor" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
         <div
           className="office-avatar"
           style={{ left: pos.x - AVATAR_SIZE / 2, top: pos.y - AVATAR_SIZE + 6 }}
@@ -347,13 +346,13 @@ export function OfficeStage({
 
       {/* 6. 아바타 앞에 서는 벽 — 방에 들어가면 머리가 이 벽 뒤로 사라진다.
              이 z 하나가 층에 높이를 준다. */}
-      <div className="office-world office-layer-front" style={{ ...worldBox, transform: camera }} aria-hidden="true">
-        {ROOM_ORDER.map((id) => {
-          const L = layouts.get(id) as RoomLayout;
+      <div className="office-world office-layer-front" style={{ width: floor.world.width, height: floor.world.height, transform: camera }} aria-hidden="true">
+        {floor.rooms.map((r) => {
+          const L = layouts.get(r.id) as RoomLayout;
           return wallRuns(L.room)
             .filter((w) => isFrontWall(w, L.room))
             .map((w, i) => (
-              <div key={`${id}-${i}`} className="o-wall" style={rect(w)}>
+              <div key={`${r.id}-${i}`} className="o-wall" style={rect(w)}>
                 {w.face && <span className="o-wall-face" />}
               </div>
             ));
@@ -367,9 +366,9 @@ export function OfficeStage({
         style={{ transform: camera, ["--cam-scale" as string]: String(scale) }}
         aria-hidden="true"
       >
-        {ROOM_ORDER.map((id) => {
-          const L = layouts.get(id) as RoomLayout;
-          const list = byDepartment.map.get(id) ?? [];
+        {floor.rooms.map((r) => {
+          const L = layouts.get(r.id) as RoomLayout;
+          const list = byDepartment.map.get(r.id) ?? [];
           const openCount = list.filter(
             (a) => a.attempt_status !== "submitted" && a.attempt_status !== "expired",
           ).length;
@@ -377,13 +376,13 @@ export function OfficeStage({
           const doorY = L.room.side === "north" ? L.room.y + ROOM.h - WALL_DRAW : L.room.y + WALL_DRAW;
           return (
             <span
-              key={id}
+              key={r.id}
               className="office-sign"
-              data-entered={entered === id ? "true" : undefined}
+              data-entered={entered === r.id ? "true" : undefined}
               style={{ left: doorX, top: doorY, ["--accent" as string]: L.room.accent }}
             >
               <i className="office-sign-chip" />
-              {DEPARTMENT_LABEL[id]}
+              {r.label}
               <b className="office-sign-count">
                 {list.length === 0 ? "비어 있음" : openCount === 0 ? "모두 완료" : `할 일 ${openCount}`}
               </b>
@@ -400,7 +399,7 @@ export function OfficeStage({
         {entered && (
           <>
             <span className="office-breadcrumb-sep">›</span>
-            <span className="office-breadcrumb-here">{DEPARTMENT_LABEL[entered]}</span>
+            <span className="office-breadcrumb-here">{labelOf(entered)}</span>
             <button type="button" className="office-breadcrumb-out" onClick={leave}>
               복도로 나가기 <kbd>Esc</kbd>
             </button>
@@ -430,12 +429,12 @@ export function OfficeStage({
                 {(peeked.departments ?? []).length > 1 &&
                   ` · ${(peeked.departments ?? [])
                     .slice(1)
-                    .map((d) => DEPARTMENT_LABEL[d] ?? d)
+                    .map(labelOf)
                     .join("·")}까지 이어집니다`}
               </span>
             </>
           ) : entered ? (
-            <span>{SECTOR_SUMMARY[entered]}</span>
+            <span>{deptOf.get(entered)?.summary ?? ""}</span>
           ) : (
             <span>부서 방으로 들어가 자리를 고르세요.</span>
           )}
@@ -447,9 +446,9 @@ export function OfficeStage({
             className="office-bar-action"
             disabled={busyId === peeked.assessment_id}
             onClick={() => {
-              const home = (peeked.departments?.[0] ?? "") as DepartmentId;
+              const home = peeked.departments?.[0] ?? "";
               if (peekedArmed) onStart(peeked);
-              else if (ROOMS[home]) enter(home);
+              else if (roomOf.has(home)) enter(home);
             }}
           >
             {busyId === peeked.assessment_id ? "준비 중..." : deskAction(peeked, peekedArmed)}
@@ -460,14 +459,19 @@ export function OfficeStage({
 
       {byDepartment.lobby.length > 0 && (
         <div className="office-lobby-tray">
-          <LobbySection assignments={byDepartment.lobby} busyId={busyId} onStart={onStart} />
+          <LobbySection
+            assignments={byDepartment.lobby}
+            busyId={busyId}
+            onStart={onStart}
+            labelOf={labelOf}
+          />
         </div>
       )}
     </div>
   );
 }
 
-const worldBox = { width: WORLD.width, height: WORLD.height } as const;
+
 
 function rect(r: { x: number; y: number; w: number; h: number }) {
   return { left: r.x, top: r.y, width: r.w, height: r.h };
@@ -490,10 +494,10 @@ function Nameplate({
   byDepartment,
 }: {
   assignment: MyAssignment;
-  layouts: Map<DepartmentId, RoomLayout>;
-  byDepartment: { map: Map<DepartmentId, MyAssignment[]> };
+  layouts: Map<string, RoomLayout>;
+  byDepartment: { map: Map<string, MyAssignment[]> };
 }) {
-  const home = (assignment.departments?.[0] ?? "") as DepartmentId;
+  const home = assignment.departments?.[0] ?? "";
   const layout = layouts.get(home);
   if (!layout) return null;
   const list = byDepartment.map.get(home) ?? [];
@@ -519,10 +523,12 @@ function LobbySection({
   assignments,
   busyId,
   onStart,
+  labelOf,
 }: {
   assignments: MyAssignment[];
   busyId: string | null;
   onStart: (assignment: MyAssignment) => void;
+  labelOf: (slug: string) => string;
 }) {
   return (
     <section aria-labelledby="sector-lobby" className="office-sector office-sector-lobby relative">
@@ -550,6 +556,7 @@ function LobbySection({
               onStart={() => onStart(a)}
               onEnterRoom={() => undefined}
               onPeek={() => undefined}
+              labelOf={labelOf}
             />
           </li>
         ))}

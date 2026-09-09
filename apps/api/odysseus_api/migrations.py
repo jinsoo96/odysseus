@@ -106,6 +106,18 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS department VARCHAR(40) NOT NULL DEFAULT ''",
         ),
     ),
+    Migration(
+        8,
+        "departments are data, not code",
+        (
+            # 표 자체는 create_all 이 만든다. 여기서는 이전 배포에서 이미 만들어졌을
+            # 수 있는 열을 맞춰 둔다 — 표가 없으면 아무 일도 일어나지 않는다.
+            "ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS summary VARCHAR(300) NOT NULL DEFAULT ''",
+            "ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS accent VARCHAR(9) NOT NULL DEFAULT '#62A8C8'",
+            "ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS ordinal INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE IF EXISTS departments ADD COLUMN IF NOT EXISTS app_preset VARCHAR(20) NOT NULL DEFAULT 'office'",
+        ),
+    ),
 )
 
 

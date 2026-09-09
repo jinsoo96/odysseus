@@ -118,7 +118,7 @@ SCENARIO = {
     "title": "GPU 패스스루 추론 VM이 느리고 가끔 부팅에 실패한다",
     "summary": "KVM/libvirt GPU 패스스루 — IOMMU 그룹·NUMA 로컬리티·휴지페이지·CPU 모델이 얽힌 고난도 가상화 문제",
     "difficulty": "hard",
-    "department": "dev",
+    "department": "ai",
     "briefing_md": (
         """**금요일 오전 11시.**
 

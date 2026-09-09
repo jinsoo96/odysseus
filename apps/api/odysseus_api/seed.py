@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .ai.autoeval import default_rubric
 from .config import settings
-from .departments import normalize_department
-from .models import Assessment, AssessmentScenario, Assignment, Scenario, User
+from .departments import DEFAULT_DEPARTMENTS, normalize_slug
+from .models import Assessment, AssessmentScenario, Assignment, Department, Scenario, User
 from .scenarios import DEFAULT_ASSESSMENTS, DEFAULT_SCENARIOS
 from .security import hash_password
 
@@ -49,7 +49,7 @@ def scenario_row(spec: dict, created_by) -> Scenario:
         rubric=spec.get("rubric") or default_rubric(),
         agent_enabled=spec.get("agent_enabled", True),
         desktop_apps=list(spec.get("desktop_apps") or []),
-        department=normalize_department(spec.get("department")),
+        department=normalize_slug(spec.get("department")),
         created_by=created_by,
     )
 
@@ -58,8 +58,34 @@ async def _has_users(db: AsyncSession) -> bool:
     return (await db.execute(select(User).limit(1))).scalar_one_or_none() is not None
 
 
+async def seed_departments(db: AsyncSession) -> int:
+    """기본 직군 한 벌을 심는다 — 이미 하나라도 있으면 손대지 않는다.
+
+    부서는 관리자가 고치는 데이터이지 코드가 아니다. 여기서 하는 일은 빈 건물에
+    방을 한 번 놓아 주는 것뿐이고, 그 뒤로는 관리 화면이 정본이다.
+    """
+    existing = (await db.execute(select(Department.slug))).scalars().all()
+    if existing:
+        return 0
+    for i, spec in enumerate(DEFAULT_DEPARTMENTS):
+        db.add(
+            Department(
+                slug=spec["slug"],
+                label=spec["label"],
+                summary=spec.get("summary", ""),
+                accent=spec.get("accent", "#62A8C8"),
+                app_preset=spec.get("app_preset", "office"),
+                ordinal=i,
+            )
+        )
+    await db.flush()
+    return len(DEFAULT_DEPARTMENTS)
+
+
 async def seed_content(db: AsyncSession, admin: User, *, demo_candidate: User | None = None) -> None:
     """기본 제공 시나리오·시험. 응시자 데모 계정이 있으면 데모 시험을 배정한다."""
+    # 시나리오가 가리킬 방을 먼저 놓는다 — 방이 없으면 전부 로비에 쌓인다.
+    await seed_departments(db)
     by_title: dict[str, Scenario] = {}
     for spec in DEFAULT_SCENARIOS:
         row = scenario_row(spec, admin.id)

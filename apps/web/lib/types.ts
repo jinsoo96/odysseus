@@ -135,25 +135,26 @@ export interface ScenarioSummary {
 
 // ── 부서 ─────────────────────────────────────────────────────
 //
-// 시나리오가 놓인 자리. 서버(`odysseus_api/departments.py`)가 정본이고 여기는 거울이다.
-// 빈 문자열은 로비 — 아직 배치되지 않은 시나리오다.
+// 부서 목록은 **코드가 아니라 데이터다.** 회사마다 뽑는 직군이 다르므로 관리자가
+// 콘솔에서 만들고 고치며, 사무실 평면도는 그 목록에서 생성된다. 그래서 여기에
+// 슬러그를 나열한 유니온 타입이 없다 — 있으면 관리자가 만든 부서를 코드가
+// 모른다는 이유로 화면에서 지워 버리게 된다.
 
-export type DepartmentId =
-  | "dev"
-  | "product"
-  | "planning"
-  | "finance"
-  | "hr"
-  | "ga"
-  | "ops"
-  | "cs";
-
-/** 관리 화면이 슬러그를 하드코딩하지 않도록 서버가 내려 주는 어휘 */
-export interface DepartmentInfo {
-  id: DepartmentId;
+export interface Department {
+  id: string;
+  /** 시나리오가 가리키는 키 */
+  slug: string;
   label: string;
+  /** 방에 들어섰을 때 보이는 한 줄 */
   summary: string;
+  /** 문패·문턱·불 켜진 화면에만 쓰는 색 (#RRGGBB) */
+  accent: string;
+  /** 평면도 배치 순서. 위 줄 왼쪽부터. */
+  ordinal: number;
+  /** 이 방의 시나리오를 새로 만들 때 권하는 앱 조합 */
   app_preset: string;
+  /** 이 방에 놓인 시나리오 수 (관리 화면용) */
+  scenario_count?: number;
 }
 
 export interface Scenario {

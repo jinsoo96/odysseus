@@ -240,7 +240,7 @@ SCENARIO = {
     "title": "상반기 예산 초과 원인 분석",
     "summary": "분석·사무 — 이월 집행을 걸러 계획 대비 차이를 계산하고, 반복/일회성을 구분한 절감안 작성",
     "difficulty": "medium",
-    "department": "finance",
+    "department": "analytics",
     "briefing_md": """**월요일 오후 2시 10분.**
 
 상반기 결산이 끝났고, 운영본부의 집행액이 계획을 넘겼다는 사실이 재무팀 보고서에 한 줄로 적혔습니다.

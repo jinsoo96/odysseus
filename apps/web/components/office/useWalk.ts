@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Facing } from "./Avatar";
-import { CORRIDOR_Y, ELEVATOR } from "./floorplan";
+
 
 export interface Point {
   x: number;
@@ -25,11 +25,12 @@ function facingOf(from: Point, to: Point): Facing {
   return dy >= 0 ? "south" : "north";
 }
 
-/** 복도를 거쳐 가는 ㄱ자 경로. 사무실에서 벽을 통과하지 않으려면 이 정도면 충분하다. */
-function pathTo(from: Point, to: Point): Point[] {
+/** 복도를 거쳐 가는 ㄱ자 경로. 사무실에서 벽을 통과하지 않으려면 이 정도면 충분하다.
+ *  복도의 높이는 층마다 다르므로(부서 수에 따라 월드가 달라진다) 밖에서 받는다. */
+function pathTo(from: Point, to: Point, corridorY: number): Point[] {
   const way: Point[] = [];
-  if (Math.abs(from.y - CORRIDOR_Y) > 1) way.push({ x: from.x, y: CORRIDOR_Y });
-  if (Math.abs(to.x - from.x) > 1) way.push({ x: to.x, y: CORRIDOR_Y });
+  if (Math.abs(from.y - corridorY) > 1) way.push({ x: from.x, y: corridorY });
+  if (Math.abs(to.x - from.x) > 1) way.push({ x: to.x, y: corridorY });
   way.push(to);
   return way;
 }
@@ -40,15 +41,15 @@ function pathTo(from: Point, to: Point): Point[] {
  * (그러면 걷지 못하는 사람은 시험을 시작할 수 없다), `prefers-reduced-motion` 이
  * 켜져 있으면 즉시 도착한다.
  */
-export function useWalk() {
-  const [pos, setPos] = useState<Point>(ELEVATOR);
+export function useWalk(home: Point, corridorY: number) {
+  const [pos, setPos] = useState<Point>(home);
   const [facing, setFacing] = useState<Facing>("east");
   const [step, setStep] = useState<0 | 1>(0);
   const [walking, setWalking] = useState(false);
 
   const frame = useRef<number | null>(null);
   const queue = useRef<Point[]>([]);
-  const posRef = useRef<Point>(ELEVATOR);
+  const posRef = useRef<Point>(home);
   const stepAt = useRef(0);
 
   const stop = useCallback(() => {
@@ -73,7 +74,7 @@ export function useWalk() {
         return;
       }
 
-      queue.current = pathTo(posRef.current, target);
+      queue.current = pathTo(posRef.current, target, corridorY);
       setWalking(true);
       let last = performance.now();
 
@@ -118,7 +119,7 @@ export function useWalk() {
 
       frame.current = requestAnimationFrame(tick);
     },
-    [],
+    [corridorY],
   );
 
   useEffect(() => stop, [stop]);
