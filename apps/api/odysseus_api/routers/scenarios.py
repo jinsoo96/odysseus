@@ -17,6 +17,7 @@ from ..ai.autoeval import default_rubric
 from ..ai.errors import describe_error
 from ..checks import as_number
 from ..db import get_db
+from ..departments import department_vocabulary
 from ..deps import require_admin, require_staff
 from ..models import AssessmentScenario, Execution, MessengerMessage, Scenario, User, WorkspaceFile
 from ..schemas import ScenarioIn, ScenarioOut, ScenarioSummary
@@ -90,6 +91,10 @@ def _apply(row: Scenario, body: ScenarioIn) -> None:
     row.rubric = body.rubric or default_rubric()
     row.agent_enabled = body.agent_enabled
     row.desktop_apps = list(body.desktop_apps or [])
+    # 부서를 보내지 않은 요청은 부서를 건드리지 않는다. 저장은 전체 교체라, 이 필드를
+    # 모르는 클라이언트가 시나리오를 한 번 저장할 때마다 방에서 로비로 내려가 버린다.
+    if body.department is not None:
+        row.department = body.department
 
 
 async def _has_history(scenario_id: uuid.UUID, db: AsyncSession) -> bool:
@@ -117,6 +122,7 @@ async def list_scenarios(db: AsyncSession = Depends(get_db), _=Depends(require_s
             character_count=len(r.characters or []),
             check_count=len(r.checks or []),
             agent_enabled=r.agent_enabled,
+            department=r.department or "",
             is_archived=r.is_archived,
             updated_at=r.updated_at,
         )
@@ -173,6 +179,12 @@ async def author_chat(body: AuthorChatIn, db: AsyncSession = Depends(get_db), _=
             yield f"data: {_json.dumps({'error': info['message'], 'code': info['code'], 'correlation_id': info['correlation_id']}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.get("/departments")
+async def scenario_departments(_=Depends(require_staff)):
+    """부서 어휘 — 슬러그와 이름을 프론트에 하드코딩하지 않기 위해 서버가 준다."""
+    return department_vocabulary()
 
 
 @router.get("/rubric-default")

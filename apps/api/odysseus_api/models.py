@@ -127,6 +127,9 @@ class Scenario(Base):
     # 이 시나리오에서 제공할 데스크톱 앱(desktop.OPTIONAL_APPS 의 부분집합).
     # 비어 있으면 전부 제공한다 — 기존 시나리오는 아무것도 바뀌지 않는다.
     desktop_apps: Mapped[list] = mapped_column(JSONB, default=list)
+    # 이 업무가 벌어지는 부서(섹터). 빈 문자열이면 아직 배치되지 않은 것으로 보고
+    # 사무실 평면도의 로비에 놓는다 — 이 컬럼이 생기기 전 시나리오는 그대로 뜬다.
+    department: Mapped[str] = mapped_column(String(40), default="")
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

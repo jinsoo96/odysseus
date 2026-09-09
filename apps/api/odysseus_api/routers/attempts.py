@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from ..config import settings
 from ..db import get_db
+from ..departments import normalize_departments
 from ..definitions import (
     FrozenScenario,
     bind_definition,
@@ -23,10 +24,12 @@ from ..deps import get_current_user, is_staff
 from ..guests import GUEST_ROLE
 from ..models import (
     Assessment,
+    AssessmentScenario,
     Assignment,
     Attempt,
     Event,
     MessengerMessage,
+    Scenario,
     User,
     WorkspaceFile,
     utcnow,
@@ -240,6 +243,30 @@ async def my_assignments(user: User = Depends(get_current_user), db: AsyncSessio
     for at in attempts:
         await check_expired(at, db)
     attempt_by_assessment = {at.assessment_id: at for at in attempts if not at.superseded}
+
+    # 시험이 어느 부서에 걸쳐 있는지는 저장하지 않고 시나리오에서 유도한다. 시험은
+    # 주제로 묶여 부서를 넘나들 수 있고(사무+일반을 한 시험에 담은 프리셋이 있다),
+    # 저장해 두면 시험을 편집할 때마다 조용히 어긋난다.
+    #
+    # 순서는 문제 순서(ordinal)다. 시험은 순차로 진행되므로 **첫 부서가 그 일이
+    # 시작되는 자리**이고, 사무실 화면은 그 자리에 책상을 놓는다.
+    # selectinload(Assessment.scenarios) 는 링크 행만 싣기 때문에 조인이 따로 필요하다.
+    departments_of: dict[uuid.UUID, list[str]] = {}
+    assessment_ids = [a.id for a in assessments]
+    if assessment_ids:
+        rows = (
+            await db.execute(
+                select(AssessmentScenario.assessment_id, Scenario.department)
+                .join(Scenario, Scenario.id == AssessmentScenario.scenario_id)
+                .where(AssessmentScenario.assessment_id.in_(assessment_ids))
+                .order_by(AssessmentScenario.assessment_id, AssessmentScenario.ordinal)
+            )
+        ).all()
+        collected: dict[uuid.UUID, list[str]] = {}
+        for assessment_id, department in rows:
+            collected.setdefault(assessment_id, []).append(department or "")
+        departments_of = {k: normalize_departments(v) for k, v in collected.items()}
+
     return [
         MyAssignmentOut(
             assessment_id=a.id,
@@ -252,6 +279,7 @@ async def my_assignments(user: User = Depends(get_current_user), db: AsyncSessio
             attempt_id=(attempt_by_assessment.get(a.id).id if attempt_by_assessment.get(a.id) else None),
             attempt_status=(attempt_by_assessment.get(a.id).status if attempt_by_assessment.get(a.id) else None),
             assigned=a.id in assigned_ids,
+            departments=departments_of.get(a.id, []),
         )
         for a in assessments
     ]

@@ -11,6 +11,10 @@
 `--refresh-characters` 는 등장인물(성격·지식·직함)을 패키지 내용으로 덮어쓴다.
 NPC 프롬프트 규약이 바뀌었을 때(예: 태도 대응 성향 추가) 이미 배포된 시나리오에
 반영하는 경로다. 진행 중인 응시의 이미 오간 대화는 그대로 남는다.
+
+`--refresh-departments` 는 시나리오가 놓인 부서를 패키지 내용으로 덮어쓴다.
+부서는 뒤늦게 생긴 컬럼이라 **이미 배포된 시나리오는 전부 빈 값(로비)**이다.
+이 플래그를 한 번 돌려야 사무실 평면도에 방이 채워진다.
 """
 
 import asyncio
@@ -19,6 +23,7 @@ import sys
 from sqlalchemy import select
 
 from odysseus_api.db import SessionLocal
+from odysseus_api.departments import normalize_department
 from odysseus_api.models import Assessment, AssessmentScenario, Assignment, Scenario, User
 from odysseus_api.scenarios import DEFAULT_ASSESSMENTS, DEFAULT_SCENARIOS
 from odysseus_api.seed import scenario_row
@@ -38,7 +43,8 @@ async def main() -> None:
         }
         refresh = "--refresh-briefings" in sys.argv
         refresh_chars = "--refresh-characters" in sys.argv
-        created = refreshed = recast = 0
+        refresh_depts = "--refresh-departments" in sys.argv
+        created = refreshed = recast = rehoused = 0
         for spec in DEFAULT_SCENARIOS:
             if spec["title"] in existing:
                 row = existing[spec["title"]]
@@ -48,6 +54,9 @@ async def main() -> None:
                 if refresh_chars and row.characters != spec.get("characters", []):
                     row.characters = spec.get("characters", [])
                     recast += 1
+                if refresh_depts and row.department != normalize_department(spec.get("department")):
+                    row.department = normalize_department(spec.get("department"))
+                    rehoused += 1
                 continue
             row = scenario_row(spec, admin.id if admin else None)
             db.add(row)
@@ -90,6 +99,7 @@ async def main() -> None:
             f"시나리오 {created}개, 시험 {made_assessments}개 추가"
             + (f", 브리핑 {refreshed}개 갱신" if refresh else "")
             + (f", 등장인물 {recast}개 갱신" if refresh_chars else "")
+            + (f", 부서 {rehoused}개 갱신" if refresh_depts else "")
             + f" (전체 시나리오 {len(existing)}개)"
         )
 

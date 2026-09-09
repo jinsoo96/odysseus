@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .ai.autoeval import default_rubric
 from .config import settings
+from .departments import normalize_department
 from .models import Assessment, AssessmentScenario, Assignment, Scenario, User
 from .scenarios import DEFAULT_ASSESSMENTS, DEFAULT_SCENARIOS
 from .security import hash_password
@@ -48,6 +49,7 @@ def scenario_row(spec: dict, created_by) -> Scenario:
         rubric=spec.get("rubric") or default_rubric(),
         agent_enabled=spec.get("agent_enabled", True),
         desktop_apps=list(spec.get("desktop_apps") or []),
+        department=normalize_department(spec.get("department")),
         created_by=created_by,
     )
 

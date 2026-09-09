@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from .departments import normalize_department
 from .desktop import normalize_desktop_apps
 
 #: 관리자가 직접 부여할 수 있는 역할. guest 는 여기 없다 — 게스트 계정은
@@ -178,10 +179,23 @@ class ScenarioIn(BaseModel):
     #: 이 시나리오에서 제공할 데스크톱 앱. 비어 있으면 전부 제공(기존 동작).
     desktop_apps: list[str] = Field(default_factory=list, max_length=20)
 
+    #: 이 업무가 벌어지는 부서. 빈 문자열은 로비(미배치)를 뜻한다.
+    #:
+    #: **없음(None)과 빈 문자열은 다르다.** 필드를 아예 보내지 않은 요청은 "부서를
+    #: 건드리지 말라"는 뜻이고, 빈 문자열을 보낸 요청은 "로비로 내려라"는 뜻이다.
+    #: 둘을 같게 두면 이 필드를 모르는 클라이언트가 저장할 때마다 부서가 조용히
+    #: 지워진다 — 전체 교체(PUT)라 다른 필드처럼 넘어가 주지 않는다.
+    department: str | None = Field(default=None, max_length=40)
+
     @field_validator("desktop_apps")
     @classmethod
     def _clean_desktop_apps(cls, value: list[str]) -> list[str]:
         return normalize_desktop_apps(value)
+
+    @field_validator("department")
+    @classmethod
+    def _clean_department(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_department(value)
 
 
 class ScenarioSummary(BaseModel):
@@ -192,6 +206,7 @@ class ScenarioSummary(BaseModel):
     character_count: int
     check_count: int
     agent_enabled: bool
+    department: str = ""
     is_archived: bool
     updated_at: datetime
 
@@ -211,6 +226,7 @@ class ScenarioOut(BaseModel):
     rubric: dict
     agent_enabled: bool
     desktop_apps: list = []
+    department: str = ""
     is_archived: bool
     created_at: datetime
     updated_at: datetime
@@ -292,6 +308,9 @@ class MyAssignmentOut(BaseModel):
     attempt_id: uuid.UUID | None = None
     attempt_status: str | None = None
     assigned: bool = True
+    #: 이 시험이 지나는 부서 — 시나리오에서 문제 순서대로 유도한다(저장하지 않는다).
+    #: 따라서 첫 항목이 **이 일이 시작되는 자리**다. 비어 있으면 로비다.
+    departments: list[str] = []
 
 
 class AttemptScenarioOut(BaseModel):

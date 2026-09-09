@@ -153,6 +153,7 @@ SCENARIO = {
     "title": "주간 매출 리포트 이상",
     "summary": "버그난 매출 집계 스크립트 — PM 제보에서 출발해 집계 규칙을 파악하고 수정",
     "difficulty": "medium",
+    "department": "dev",
     "briefing_md": (
         """**월요일 오전 9시 12분.**
 

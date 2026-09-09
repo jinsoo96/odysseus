@@ -128,6 +128,7 @@ SCENARIO = {
     "title": "LLM 추론 서비스가 GPU 노드에서 계속 죽는다",
     "summary": "vLLM + docker compose 배포 장애 — GPU 미할당·OOM·NCCL 공유메모리·게이트웨이 타임아웃이 겹친 고난도 인프라 문제",
     "difficulty": "hard",
+    "department": "dev",
     "briefing_md": (
         """**새벽 3시 40분. 당직 알림이 열두 번째 울립니다.**
 

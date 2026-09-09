@@ -99,6 +99,13 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS desktop_apps JSONB NOT NULL DEFAULT '[]'::jsonb",
         ),
     ),
+    Migration(
+        7,
+        "scenario owning department",
+        (
+            "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS department VARCHAR(40) NOT NULL DEFAULT ''",
+        ),
+    ),
 )
 
 

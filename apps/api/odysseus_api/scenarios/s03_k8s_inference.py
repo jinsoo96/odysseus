@@ -142,6 +142,7 @@ SCENARIO = {
     "title": "쿠버네티스 추론 파드가 스케줄되지 않는다",
     "summary": "k8s GPU 워크로드 배포 실패 — taint/toleration·GPU 리소스·프로브·서비스 셀렉터·PVC가 모두 얽힌 고난도 문제",
     "difficulty": "hard",
+    "department": "dev",
     "briefing_md": (
         """**화요일 오후 4시 20분.**
 

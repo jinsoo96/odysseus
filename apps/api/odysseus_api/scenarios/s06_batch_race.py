@@ -148,6 +148,7 @@ SCENARIO = {
     "title": "야간 임베딩 배치가 결과를 흘린다",
     "summary": "ThreadPoolExecutor 동시성 버그 — 청크 경계 off-by-one, 공유 상태 경쟁, 순서 보장 상실 (숨은 계약 테스트로 채점)",
     "difficulty": "hard",
+    "department": "dev",
     "briefing_md": (
         """**수요일 오전 10시. 사흘째 같은 알림입니다.**
 
