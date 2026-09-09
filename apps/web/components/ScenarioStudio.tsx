@@ -15,12 +15,17 @@ import type {
   Scenario,
   ScenarioDraft,
 } from "@/lib/types";
+import { DEPARTMENT_LABEL } from "@/lib/format";
 import { ScenarioAuthorChat } from "@/components/ScenarioAuthorChat";
 import { CodeEditor } from "@/components/CodeEditor";
 import { Markdown } from "@/components/Markdown";
 import { useToast } from "@/components/toast";
 import { Button, Card, Field, inputCls } from "@/components/ui";
 import { IconAdd, IconDelete } from "@/components/icons";
+
+/** 부서 슬러그 — 서버 `departments.py` 의 DEPARTMENTS 와 같은 순서.
+ *  이름은 `DEPARTMENT_LABEL` 이 들고 있다. */
+const DEPARTMENTS = ["dev", "product", "planning", "finance", "hr", "ga", "ops", "cs"];
 
 const TABS = [
   { key: "basic", label: "기본 정보" },
@@ -103,6 +108,7 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
   const [title, setTitle] = useState(initial?.title ?? "");
   const [summary, setSummary] = useState(initial?.summary ?? "");
   const [difficulty, setDifficulty] = useState(initial?.difficulty ?? "medium");
+  const [department, setDepartment] = useState(initial?.department ?? "");
   const [briefing, setBriefing] = useState(initial?.briefing_md ?? "");
   // NPC 기본 규칙 덮어쓰기 — 비어 있으면 전역 기본을 쓴다. 기본값은 필요할 때 서버에서 받아 온다.
   const [npcRules, setNpcRules] = useState(initial?.npc_base_prompt ?? "");
@@ -235,6 +241,7 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
       title: title.trim(),
       summary,
       difficulty,
+      department,
       briefing_md: briefing,
       characters,
       opening_messages: opening,
@@ -338,6 +345,20 @@ export function ScenarioStudio({ initial, scenarioId }: { initial?: Scenario; sc
               </select>
             </Field>
           </div>
+          <Field label="부서 (사무실 화면에서 이 시나리오가 놓일 방 — 정하지 않으면 로비)">
+            <select
+              className={`${inputCls} ${hl("department")}`}
+              value={department}
+              onChange={(e) => setDepartment(e.target.value)}
+            >
+              <option value="">로비 (미배치)</option>
+              {DEPARTMENTS.map((d) => (
+                <option key={d} value={d}>
+                  {DEPARTMENT_LABEL[d]}
+                </option>
+              ))}
+            </select>
+          </Field>
           <Field label="한 줄 요약 (관리용)">
             <input className={`${inputCls} ${hl("summary")}`} value={summary} onChange={(e) => setSummary(e.target.value)} />
           </Field>

@@ -20,6 +20,7 @@
 
 "커머스 데이터플랫폼팀. 주간 매출 리포트 숫자가 이상하다는 CS 제보, medium" 한 줄이면 AI 가 제목·서사형 브리핑·인물(성격·지식·태도)·오프닝·초기 데이터·숨은 정답·자동 체크를 설계해 **필드 단위로 실시간** 채우고, "QA 를 하나 더", "데이터를 40행으로" 를 이어 가며 고도화합니다. 받은 것은 검증·정규화(인물 키·발신자·경로·정규식·배점)를 거치고, 저장은 사람이 합니다.
 
+- **부서** — 이 업무가 벌어지는 팀. 응시자의 **사무실 화면**에서 이 시나리오가 어느 방에 놓일지를 정합니다. 정하지 않으면 로비에 남고, 목록 화면에서는 지금까지와 똑같이 보입니다. 어휘는 `apps/api/odysseus_api/departments.py` 가 정본이고 `GET /scenarios/departments` 로도 받을 수 있습니다
 - **등장인물** — 이름/직함/성격(무례한 상대를 대하는 방식 포함) + `knowledge`(물어보면 답할 수 있는 정보의 전부). 요구사항을 인물별로 분산
 - **오프닝 메시지** — 응시 시작 시 도착해 있는 메시지. 응시자의 유일한 출발점
 - **초기 파일** — 워크스페이스 초기 상태(데이터·버그 코드·문서)
@@ -116,6 +117,17 @@ sudo ./scripts/restore.sh /var/backups/odysseus/ (암호화, root 전용)<file>.
 | `ODYSSEUS_ENV` | `production`(기본) 또는 `development` |
 | `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` | 빈 DB 최초 기동 시 만들 관리자. 비밀번호를 비우면 무작위 생성 후 api 로그에 한 번 출력 |
 | `SEED_DEMO_DATA` | **개발 전용.** 고정 비밀번호의 데모 계정 3개를 만든다. `ODYSSEUS_ENV=development` 가 아니면 기동 거부 (기본 false) |
+
+### 이미 돌고 있는 배포에 부서 채우기
+
+부서(`scenarios.department`)는 뒤늦게 생긴 컬럼이라 **기존 시나리오는 전부 빈 값(로비)** 입니다. 스키마는 기동할 때 저절로 올라가지만 값은 따로 넣어야 사무실 화면에 방이 채워집니다.
+
+```bash
+docker cp tests/smoke/seed_scenarios.py odysseus-api-1:/tmp/
+docker exec -e PYTHONPATH=/app odysseus-api-1 python3 /tmp/seed_scenarios.py --refresh-departments
+```
+
+기본 제공 25종의 부서만 패키지 값으로 덮어씁니다. 직접 만든 시나리오는 건드리지 않으므로 스튜디오에서 지정하세요.
 
 데모 계정(개발 시드에서만 생성, 스모크 테스트가 사용): `admin@odysseus.dev` · `evaluator@odysseus.dev` · `candidate@odysseus.dev` — 비밀번호는 `apps/api/odysseus_api/seed.py` 의 `DEMO_ACCOUNTS`. 운영 데이터에 이 계정이 남아 있으면 안 된다 (`docs/security/01`).
 

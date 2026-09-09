@@ -32,6 +32,19 @@ export function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** 부서 이름 — 서버(`departments.py`)의 DEPARTMENT_LABELS 와 같은 값을 쓴다.
+ *  응시자 화면은 로그인 직후 이 이름을 바로 그려야 해서 요청을 한 번 더 하지 않는다. */
+export const DEPARTMENT_LABEL: Record<string, string> = {
+  dev: "개발팀",
+  product: "프로덕트팀",
+  planning: "경영기획팀",
+  finance: "재무팀",
+  hr: "인사팀",
+  ga: "총무팀",
+  ops: "운영지원팀",
+  cs: "고객지원팀",
+};
+
 export const DIFFICULTY_LABEL: Record<string, string> = {
   easy: "쉬움",
   medium: "보통",

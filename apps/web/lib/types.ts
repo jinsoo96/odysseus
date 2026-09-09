@@ -127,8 +127,33 @@ export interface ScenarioSummary {
   character_count: number;
   check_count: number;
   agent_enabled: boolean;
+  /** 이 시나리오가 놓인 부서 (빈 문자열 = 로비) */
+  department?: string;
   is_archived: boolean;
   updated_at: string;
+}
+
+// ── 부서 ─────────────────────────────────────────────────────
+//
+// 시나리오가 놓인 자리. 서버(`odysseus_api/departments.py`)가 정본이고 여기는 거울이다.
+// 빈 문자열은 로비 — 아직 배치되지 않은 시나리오다.
+
+export type DepartmentId =
+  | "dev"
+  | "product"
+  | "planning"
+  | "finance"
+  | "hr"
+  | "ga"
+  | "ops"
+  | "cs";
+
+/** 관리 화면이 슬러그를 하드코딩하지 않도록 서버가 내려 주는 어휘 */
+export interface DepartmentInfo {
+  id: DepartmentId;
+  label: string;
+  summary: string;
+  app_preset: string;
 }
 
 export interface Scenario {
@@ -148,6 +173,8 @@ export interface Scenario {
   agent_enabled: boolean;
   /** 이 시나리오에서 제공할 앱 (빈 배열 = 전부) */
   desktop_apps?: DesktopAppId[];
+  /** 이 업무가 벌어지는 부서 (빈 문자열 = 로비) */
+  department?: string;
   is_archived: boolean;
   created_at: string;
   updated_at: string;
@@ -207,6 +234,11 @@ export interface MyAssignment {
   attempt_id: string | null;
   attempt_status: string | null;
   assigned: boolean;
+  /**
+   * 이 시험이 지나는 부서 — 문제 순서대로 온다.
+   * 따라서 `departments[0]` 이 이 일이 시작되는 자리다. 비어 있으면 로비.
+   */
+  departments: string[];
 }
 
 export interface AttemptCharacter {
