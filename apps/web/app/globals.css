@@ -587,12 +587,18 @@ body {
   transform: translate(-50%, -100%) scale(calc(1 / var(--cam-scale)));
   transform-origin: bottom center;
 }
+/* 아래로 뒤집힌 이름표 — 기준점이 위쪽 가운데가 된다 */
+.office-labels > [data-below] {
+  transform: translate(-50%, 0) scale(calc(1 / var(--cam-scale)));
+  transform-origin: top center;
+}
 
 /* 문패 — 복도에서 방을 알아보는 유일한 수단 */
 .office-sign {
-  @apply inline-flex items-center gap-1.5 whitespace-nowrap;
-  max-width: 150px;
-  padding: 4px 8px;
+  @apply inline-flex items-center gap-1.5 overflow-hidden whitespace-nowrap;
+  max-width: 210px;
+  padding: 5px 9px;
+  line-height: 1.5;
   border-radius: 3px;
   background: #0e1420;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -603,8 +609,10 @@ body {
   color: var(--o-text);
 }
 .office-sign[data-entered] { border-color: var(--accent); }
-.office-sign-chip { width: 6px; height: 12px; border-radius: 1px; background: var(--accent); }
-.office-sign-count { font-size: 10px; font-weight: 600; color: var(--o-text-2); }
+.office-sign-chip { @apply shrink-0; width: 6px; height: 12px; border-radius: 1px; background: var(--accent); }
+/* 이름이 길면 이름만 줄인다. 개수는 끝까지 남아야 방을 고를 수 있다. */
+.office-sign-name { @apply min-w-0 truncate; }
+.office-sign-count { @apply shrink-0; font-size: 10px; font-weight: 600; color: var(--o-text-2); }
 
 /* 이름표 — 한 번에 하나만. 자리마다 붙이면 그건 다시 카드 격자다. */
 .office-plate {
@@ -657,6 +665,13 @@ body {
   color: #93a4c0;
 }
 .office-legend span { @apply inline-flex items-center gap-1.5; }
+.office-legend-keys { @apply gap-0.5; }
+.office-legend-keys kbd {
+  @apply inline-flex h-4 w-4 items-center justify-center rounded border text-[9px] leading-none;
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #cbd5e1;
+}
+.office-legend-keys kbd:last-of-type { @apply mr-1; }
 .office-legend-dot { @apply inline-block h-2.5 w-2.5 rounded-sm; }
 .office-legend-dot[data-state="open"] { background: #7fd4ff; }
 .office-legend-dot[data-state="resume"] { background: #e8b96a; }
