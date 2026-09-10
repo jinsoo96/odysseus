@@ -492,3 +492,87 @@ export function thresholdOf(room: Room): { x: number; y: number; w: number; h: n
     h: 4,
   };
 }
+
+/** 걸어 다닐 수 있는 자리 (월드 좌표 사각형들의 합집합).
+ *
+ *  복도, 방 안쪽, 그리고 그 둘을 잇는 문틈. 벽 위는 걸을 수 없다. 방향키로 움직일 때
+ *  이 합집합 안에 있는지만 보면 되므로 충돌 판정에 격자를 다시 만들 필요가 없다. */
+export function walkableRects(
+  floor: Floor,
+  layouts: Map<string, RoomLayout>,
+): { x: number; y: number; w: number; h: number }[] {
+  const out: { x: number; y: number; w: number; h: number }[] = [
+    {
+      x: floor.corridor.left,
+      y: floor.corridor.top,
+      w: floor.corridor.right - floor.corridor.left,
+      h: floor.corridor.bottom - floor.corridor.top,
+    },
+  ];
+  for (const room of floor.rooms) {
+    const inner = innerOrigin(room);
+    // 방 안은 **가구가 없는 칸만** 걷는다. 배치할 때 판 통로가 그대로 다니는 길이 된다.
+    const grid = layouts.get(room.id)?.grid;
+    for (let r = 0; r < INNER_ROWS; r += 1) {
+      for (let c = 0; c < INNER_COLS; c += 1) {
+        const v = grid ? grid[cellIndex(c, r)] : EMPTY;
+        if (v !== EMPTY && v !== WALK && v !== CLEAR) continue;
+        out.push({ x: inner.x + c * TILE, y: inner.y + r * TILE, w: TILE, h: TILE });
+      }
+    }
+    // 문틈 — 방 안쪽 끝과 복도 사이의 벽 띠에서 문 폭만큼만 뚫려 있다
+    const doorX = room.x + (ROOM.w - DOOR_WIDTH) / 2;
+    out.push(
+      room.side === "north"
+        ? {
+            x: doorX,
+            y: inner.y + INNER_ROWS * TILE,
+            w: DOOR_WIDTH,
+            h: room.y + ROOM.h - (inner.y + INNER_ROWS * TILE),
+          }
+        : { x: doorX, y: room.y, w: DOOR_WIDTH, h: WALL },
+    );
+  }
+  return out;
+}
+
+/** 아바타가 이 자리에 설 수 있는가.
+ *
+ *  가운데 점 하나가 아니라 몸 상자의 네 귀퉁이를 본다. 점만 보면 벽 모서리를 스치듯
+ *  통과해 버리고, 각 사각형을 반지름만큼 줄여서 보면 사각형이 맞닿는 자리(복도와 문틈
+ *  사이)에 걸을 수 없는 틈이 생긴다. */
+export function canStand(
+  x: number,
+  y: number,
+  rects: { x: number; y: number; w: number; h: number }[],
+  radius = 11,
+): boolean {
+  const inside = (px: number, py: number) =>
+    rects.some((r) => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h);
+  return (
+    inside(x - radius, y - radius) &&
+    inside(x + radius, y - radius) &&
+    inside(x - radius, y + radius) &&
+    inside(x + radius, y + radius)
+  );
+}
+
+/** 이 점이 어느 방 안인가. 복도면 null. */
+export function roomAt(
+  x: number,
+  y: number,
+  floor: Floor,
+): Room | null {
+  for (const room of floor.rooms) {
+    const inner = innerOrigin(room);
+    if (
+      x >= inner.x &&
+      x <= inner.x + INNER_COLS * TILE &&
+      y >= inner.y &&
+      y <= inner.y + INNER_ROWS * TILE
+    ) {
+      return room;
+    }
+  }
+  return null;
+}
