@@ -213,6 +213,13 @@ export function OfficeStage({
       if (e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
       if (DIR[e.key]) {
         e.preventDefault(); // 방향키로 화면이 같이 스크롤되면 층이 흔들린다
+        // 방향키를 잡는 순간 포커스를 놓는다. 자리를 클릭하면 포커스가 그 버튼에
+        // 남는데, 그 상태로 다른 방까지 걸어가 Enter 를 누르면 Enter 가 아까 그
+        // 버튼으로 가서 원래 방으로 되돌아간다. 걷기 시작했으면 조종은 층에 있다.
+        const focused = document.activeElement as HTMLElement | null;
+        if (focused && focused !== document.body && viewportRef.current?.contains(focused)) {
+          focused.blur();
+        }
         if (!keys.current.has(e.key)) {
           keys.current.add(e.key);
           apply();
